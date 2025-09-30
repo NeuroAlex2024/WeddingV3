@@ -2,7 +2,7 @@ const express = require('express');
 
 const { getPrismaClient } = require('../src/db/client');
 const config = require('../src/server/config');
-const { requireAuth } = require('../src/server');
+const { requireAuth } = require('../src/middleware/auth');
 const {
   hashPassword,
   verifyPassword,
@@ -119,7 +119,13 @@ router.post('/register', async (req, res) => {
       refreshTokenExpiresInMs: tokens.refreshTokenExpiresInMs
     });
   } catch (error) {
-    console.error('Не удалось зарегистрировать пользователя', error);
+    console.error('Не удалось зарегистрировать пользователя', {
+      error: error.message,
+      stack: error.stack,
+      phone,
+      role: normalizedRole,
+      timestamp: new Date().toISOString()
+    });
     return res.status(500).json({ error: 'Не удалось создать пользователя. Попробуйте позже.' });
   }
 });

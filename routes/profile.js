@@ -83,7 +83,12 @@ router.get('/', async (req, res) => {
 
     return res.json(buildProfileResponse(user));
   } catch (error) {
-    console.error('Не удалось получить профиль пользователя', error);
+    console.error('Не удалось получить профиль пользователя', {
+      error: error.message,
+      stack: error.stack,
+      userId,
+      timestamp: new Date().toISOString()
+    });
     return res.status(500).json({ error: 'Не удалось получить профиль.' });
   }
 });
@@ -190,7 +195,13 @@ router.put('/', async (req, res) => {
 
     return res.json(buildProfileResponse(refreshedUser));
   } catch (error) {
-    console.error('Не удалось обновить профиль пользователя', error);
+    console.error('Не удалось обновить профиль пользователя', {
+      error: error.message,
+      stack: error.stack,
+      userId,
+      body: req.body,
+      timestamp: new Date().toISOString()
+    });
     return res.status(500).json({ error: 'Не удалось обновить профиль.' });
   }
 });
