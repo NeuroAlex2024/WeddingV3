@@ -1,0 +1,2 @@
+# This file is generated to ensure Prisma migrations target PostgreSQL 15.
+provider = "postgresql"
