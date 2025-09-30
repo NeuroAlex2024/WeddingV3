@@ -4,11 +4,17 @@
 
 ## Запуск проекта
 
-1. Установите зависимости:
+1. Скопируйте `.env.example` в `.env` и заполните значения переменных окружения.
+2. Установите зависимости:
    ```bash
    npm install
    ```
-2. Запустите сервер (Express отдаёт статические файлы и API):
+3. Поднимите PostgreSQL 15 (см. раздел ниже) и примените миграции Prisma:
+   ```bash
+   npm run prisma:migrate
+   npm run prisma:generate
+   ```
+4. Запустите сервер (Express отдаёт статические файлы и API):
    ```bash
    npm run dev
    ```
@@ -16,13 +22,56 @@
    ```bash
    npm start
    ```
-3. Откройте [http://localhost:3000](http://localhost:3000) в браузере. Конструктор и опубликованные приглашения обслуживаются одним Node.js приложением.
+5. Откройте [http://localhost:3000](http://localhost:3000) в браузере. Конструктор и опубликованные приглашения обслуживаются одним Node.js приложением.
 
 ### Совместный просмотр по сети
 
 - Убедитесь, что сервер запущен и порт 3000 открыт в файерволе.
 - Узнайте локальный IP адрес хоста (например, `192.168.0.10`).
 - Гости могут открывать приложение по адресу `http://192.168.0.10:3000` и переходить по сгенерированным ссылкам вида `http://192.168.0.10:3000/invite/<slug>`.
+
+### PostgreSQL 15 локально
+
+Самый быстрый способ запустить PostgreSQL 15 — использовать Docker:
+
+```bash
+docker run \
+  --name wedding-postgres \
+  -e POSTGRES_USER=wedding \
+  -e POSTGRES_PASSWORD=wedding \
+  -e POSTGRES_DB=wedding \
+  -p 5432:5432 \
+  -d postgres:15
+```
+
+После запуска контейнера установите переменную `DATABASE_URL` в `.env`, например:
+
+```
+DATABASE_URL=postgresql://wedding:wedding@localhost:5432/wedding
+```
+
+Примените миграции:
+
+```bash
+npm run prisma:migrate
+```
+
+При необходимости пересоберите Prisma Client:
+
+```bash
+npm run prisma:generate
+```
+
+### Подключение через DataGrip
+
+- **Host**: `localhost`
+- **Port**: `5432`
+- **Database**: `wedding`
+- **User**: `wedding`
+- **Password**: `wedding`
+- **Driver**: `PostgreSQL`
+
+После ввода параметров протестируйте подключение и сохраните его для работы с схемой и данными.
 
 ## Публикация приглашений
 

@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String              @id @default(uuid())
+  email              String              @unique
+  passwordHash       String
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  contractorProfile  ContractorProfile?
+  weddingProfile     WeddingProfile?
+  invitations        InvitationMeta[]
+}
+
+model ContractorProfile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+  companyName String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model WeddingProfile {
+  id            String   @id @default(uuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id])
+  coupleNames   String
+  eventDate     DateTime?
+  location      String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  guests        Guest[]
+}
+
+model InvitationMeta {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  slug      String   @unique
+  theme     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  guests    Guest[]
+}
+
+model Guest {
+  id                String           @id @default(uuid())
+  invitationId      String
+  invitation        InvitationMeta   @relation(fields: [invitationId], references: [id])
+  weddingProfileId  String?
+  weddingProfile    WeddingProfile?  @relation(fields: [weddingProfileId], references: [id])
+  name              String
+  email             String?
+  status            String           @default("pending")
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([invitationId])
+  @@index([weddingProfileId])
+}
