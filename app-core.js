@@ -9,13 +9,13 @@
   };
 
   const ROUTE_ACCESS_BY_ROLE = {
-    guest: new Set(["#/quiz"]),
+    guest: new Set(["#/dashboard", "#/quiz", "#/website"]),
     planner: new Set(["#/quiz", "#/dashboard", "#/website"]),
     admin: new Set(["#/quiz", "#/dashboard", "#/website"])
   };
-  const PUBLIC_ROUTES = new Set(["#/quiz"]);
+  const PUBLIC_ROUTES = new Set(["#/dashboard", "#/quiz", "#/website"]);
   const DEFAULT_ROUTE_BY_ROLE = {
-    guest: "#/quiz",
+    guest: "#/dashboard",
     planner: "#/dashboard",
     admin: "#/dashboard"
   };
