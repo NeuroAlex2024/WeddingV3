@@ -7,34 +7,36 @@ const {
   ensureInvitesDirectory
 } = require('../../lib/invitations');
 const invitationsRouter = require('../../routes/invitations');
-const { prisma } = require('../db/client');
+const dbClient = require('../db/client');
+const {
+  shutdownPrisma,
+  checkDatabaseConnection
+} = dbClient;
 
-const app = express();
+function createApp() {
+  const app = express();
 
-app.use(morgan('dev'));
-app.use(express.json({ limit: '1mb' }));
-app.use('/', invitationsRouter);
-app.use(express.static(ROOT_DIR, { extensions: ['html'] }));
-
-app.use((err, req, res, next) => {
-  if (err instanceof SyntaxError && 'body' in err) {
-    return res.status(400).json({ error: 'Не удалось разобрать данные запроса.' });
+  if (config.logging?.httpFormat) {
+    app.use(morgan(config.logging.httpFormat));
   }
-  return next(err);
-});
 
-app.use((err, req, res, next) => {
-  console.error('Непредвиденная ошибка сервера', err);
-  res.status(500).json({ error: 'Произошла непредвиденная ошибка.' });
-});
+  app.use(express.json({ limit: '1mb' }));
+  app.use('/', invitationsRouter);
+  app.use(express.static(ROOT_DIR, { extensions: ['html'] }));
 
-async function checkDatabaseConnection() {
-  try {
-    await prisma.$connect();
-    console.log('Successfully connected to the database.');
-  } catch (error) {
-    console.error('Failed to connect to the database', error);
-  }
+  app.use((err, req, res, next) => {
+    if (err instanceof SyntaxError && 'body' in err) {
+      return res.status(400).json({ error: 'Не удалось разобрать данные запроса.' });
+    }
+    return next(err);
+  });
+
+  app.use((err, req, res, next) => {
+    console.error('Непредвиденная ошибка сервера', err);
+    res.status(500).json({ error: 'Произошла непредвиденная ошибка.' });
+  });
+
+  return app;
 }
 
 async function start(options = {}) {
@@ -42,14 +44,38 @@ async function start(options = {}) {
   const port = options.port ?? config.port;
 
   await ensureInvitesDirectory();
-  await checkDatabaseConnection();
 
-  return new Promise((resolve) => {
-    const server = app.listen(port, host, () => {
+  const dbStatus = await checkDatabaseConnection();
+  if (dbStatus.ok) {
+    console.log('Successfully connected to the database.');
+  } else if (dbStatus.reason === 'missing_database_url') {
+    console.warn('DATABASE_URL is not configured. Prisma client will remain disabled until the variable is provided.');
+  } else if (dbStatus.error) {
+    console.error('Failed to connect to the database', dbStatus.error);
+  }
+
+  const app = createApp();
+
+  const server = await new Promise((resolve) => {
+    const instance = app.listen(port, host, () => {
       console.log(`Wedding server is running on http://${host}:${port}`);
-      resolve(server);
+      resolve(instance);
     });
   });
+
+  const stop = async () => {
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          return reject(error);
+        }
+        return resolve();
+      });
+    });
+    await shutdownPrisma();
+  };
+
+  return { app, server, stop };
 }
 
 if (require.main === module) {
@@ -60,6 +86,9 @@ if (require.main === module) {
 }
 
 module.exports = {
-  app,
-  start
+  createApp,
+  start,
+  shutdownPrisma,
+  checkDatabaseConnection,
+  initializePrisma: dbClient.initializePrisma
 };
