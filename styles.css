@@ -46,6 +46,16 @@ p {
   box-shadow: 0 10px 25px rgba(47, 42, 59, 0.08);
 }
 
+.profile-warning {
+  margin-bottom: 1.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: #fff4e5;
+  color: #7a4a00;
+  border: 1px solid rgba(231, 142, 46, 0.4);
+  font-size: 0.95rem;
+}
+
 .welcome {
   display: grid;
   gap: 2.5rem;

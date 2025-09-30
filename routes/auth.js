@@ -13,6 +13,16 @@ const {
 const prisma = getPrismaClient();
 const router = express.Router();
 
+const ALLOWED_REGISTRATION_ROLES = new Set(['wedding', 'contractor']);
+
+function normalizeRole(role) {
+  if (!role || typeof role !== 'string') {
+    return null;
+  }
+  const normalized = role.trim().toLowerCase();
+  return normalized && ALLOWED_REGISTRATION_ROLES.has(normalized) ? normalized : null;
+}
+
 function sanitizeUser(user) {
   if (!user) {
     return null;
@@ -48,7 +58,7 @@ function setRefreshCookie(res, token) {
 }
 
 router.post('/register', async (req, res) => {
-  const { phone, password, email } = req.body || {};
+  const { phone, password, email, role } = req.body || {};
 
   if (!phone || typeof phone !== 'string') {
     return res.status(400).json({ error: 'Необходимо указать номер телефона.' });
@@ -57,6 +67,12 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Необходимо указать одноразовый пароль.' });
   }
 
+  const normalizedRoleCandidate = normalizeRole(role);
+  if (role !== undefined && role !== null && normalizedRoleCandidate === null) {
+    return res.status(400).json({ error: 'Недопустимая роль пользователя.' });
+  }
+  const normalizedRole = normalizedRoleCandidate || 'wedding';
+
   try {
     const existingUser = await prisma.user.findUnique({ where: { phone } });
     if (existingUser) {
@@ -64,13 +80,32 @@ router.post('/register', async (req, res) => {
     }
 
     const passwordHash = await hashPassword(password);
-    const createdUser = await prisma.user.create({
-      data: {
-        phone,
-        email: email ? email : null,
-        passwordHash,
-        phoneConfirmed: true
+    const createdUser = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          phone,
+          email: email ? email : null,
+          passwordHash,
+          phoneConfirmed: true,
+          role: normalizedRole
+        }
+      });
+
+      if (normalizedRole === 'contractor') {
+        await tx.contractorProfile.create({
+          data: {
+            userId: user.id
+          }
+        });
+      } else {
+        await tx.weddingProfile.create({
+          data: {
+            userId: user.id
+          }
+        });
       }
+
+      return user;
     });
 
     const refreshToken = await rotateRefreshToken(prisma, createdUser.id);

@@ -55,7 +55,48 @@
       const profile = this.state.profile;
       const hasProfile = Boolean(profile);
       const quizCompleted = Boolean(profile && profile.quizCompleted);
+      const serverSnapshot =
+        typeof this.getServerProfileSnapshot === "function" ? this.getServerProfileSnapshot(profile) : null;
+      const normalizedRole =
+        typeof this.normalizeRole === "function"
+          ? this.normalizeRole(serverSnapshot?.user?.role || profile?.role || this.state.currentRole)
+          : this.state.currentRole;
+      const activeServerProfile =
+        typeof this.getActiveServerProfile === "function"
+          ? this.getActiveServerProfile(serverSnapshot, normalizedRole)
+          : null;
+      const serverCompanyName =
+        (activeServerProfile && typeof activeServerProfile.companyName === "string"
+          ? activeServerProfile.companyName
+          : profile?.companyName) || "";
+      const serverCoupleNames =
+        (activeServerProfile && typeof activeServerProfile.coupleNames === "string"
+          ? activeServerProfile.coupleNames
+          : profile?.coupleNames) || "";
+      const serverLocation =
+        (activeServerProfile && typeof activeServerProfile.location === "string"
+          ? activeServerProfile.location
+          : profile?.location) || "";
+      const serverEventDate =
+        (activeServerProfile && activeServerProfile.eventDate !== undefined
+          ? activeServerProfile.eventDate
+          : profile?.eventDate) || null;
       const summaryItems = [];
+      if (hasProfile) {
+        if (normalizedRole === "contractor" && serverCompanyName) {
+          summaryItems.push(`Компания: ${this.escapeHtml(serverCompanyName)}`);
+        } else if (serverCoupleNames) {
+          summaryItems.push(`Пара: ${this.escapeHtml(serverCoupleNames)}`);
+        }
+        if (serverLocation) {
+          summaryItems.push(`Локация: ${this.escapeHtml(serverLocation)}`);
+        }
+        const serverDateText =
+          typeof this.formatServerEventDate === "function" ? this.formatServerEventDate(serverEventDate) : "";
+        if (serverDateText) {
+          summaryItems.push(`Дата: ${this.escapeHtml(serverDateText)}`);
+        }
+      }
       if (hasProfile && profile.vibe && profile.vibe.length) {
         summaryItems.push(`Атмосфера: ${profile.vibe.join(", ")}`);
       }
@@ -76,9 +117,18 @@
         : "";
       const summaryFallback = "";
       const introBlock = hasProfile ? summaryLine || summaryFallback : "";
-      const heading = hasProfile
-        ? `${profile.groomName || "Жених"} + ${profile.brideName || "Невеста"}, добро пожаловать!`
-        : "Планирование свадьбы без стресса";
+      let headingText;
+      if (!hasProfile) {
+        headingText = "Планирование свадьбы без стресса";
+      } else if (normalizedRole === "contractor") {
+        const displayCompany = serverCompanyName || profile?.companyName || "Ваш профиль";
+        headingText = `${displayCompany}, добро пожаловать!`;
+      } else {
+        const fallbackNames = `${profile?.groomName || "Жених"} + ${profile?.brideName || "Невеста"}`;
+        const displayNames = serverCoupleNames || fallbackNames;
+        headingText = `${displayNames}, добро пожаловать!`;
+      }
+      const heading = this.escapeHtml(headingText);
       const headingSubtext = hasProfile
         ? `<p class="dashboard-subtitle">Здесь вы можете собрать все необходимое для свадьбы мечты.</p>`
         : "";
@@ -218,8 +268,13 @@
             .join("")
         : '<p class="budget-empty">Добавьте статьи, чтобы увидеть распределение бюджета.</p>';
       const marketplaceModule = this.renderMarketplaceModule(backgroundInertAttributes);
+      const warningBlock =
+        this.state.profileSyncStatus === "degraded"
+          ? '<div class="profile-warning" role="status" aria-live="polite">Сервер профиля временно недоступен. Показаны сохранённые данные.</div>'
+          : "";
       this.appEl.innerHTML = `
         <section class="card dashboard">
+          ${warningBlock}
           <nav class="dashboard-nav" aria-label="Основные разделы">
             ${navItems}
           </nav>
