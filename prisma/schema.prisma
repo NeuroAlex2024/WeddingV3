@@ -12,7 +12,7 @@ model User {
   email              String?             @unique
   phone              String              @unique
   phoneConfirmed     Boolean             @default(false)
-  role               String              @default("guest")
+  role               UserRole            @default(guest)
   passwordHash       String
   refreshTokenHash   String?
   createdAt          DateTime            @default(now())
@@ -26,7 +26,7 @@ model ContractorProfile {
   id          String   @id @default(uuid())
   userId      String   @unique
   user        User     @relation(fields: [userId], references: [id])
-  companyName String
+  companyName String   @default("")
   description String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -36,7 +36,7 @@ model WeddingProfile {
   id            String   @id @default(uuid())
   userId        String   @unique
   user          User     @relation(fields: [userId], references: [id])
-  coupleNames   String
+  coupleNames   String   @default("")
   eventDate     DateTime?
   location      String?
   createdAt     DateTime @default(now())
@@ -69,4 +69,10 @@ model Guest {
 
   @@index([invitationId])
   @@index([weddingProfileId])
+}
+
+enum UserRole {
+  guest
+  wedding
+  contractor
 }

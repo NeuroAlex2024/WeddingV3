@@ -3,6 +3,7 @@ const morgan = require('morgan');
 
 const config = require('./config');
 const authRouter = require('../../routes/auth');
+const profileRouter = require('../../routes/profile');
 const {
   ROOT_DIR,
   ensureInvitesDirectory
@@ -14,8 +15,6 @@ const {
   checkDatabaseConnection
 } = dbClient;
 const { verifyAccessToken } = require('../services/auth');
-
-const prisma = config.databaseUrl ? dbClient.getPrismaClient() : null;
 
 function requireAuth(req, res, next) {
   const authorization = req.headers.authorization || req.get('authorization');
@@ -47,40 +46,7 @@ function createApp() {
 
   app.use(express.json({ limit: '1mb' }));
   app.use('/api/auth', authRouter);
-  app.get('/api/profile', requireAuth, async (req, res) => {
-    if (!prisma) {
-      return res.status(503).json({ error: 'База данных временно недоступна.' });
-    }
-
-    try {
-      const userId = req.user?.sub;
-      if (!userId) {
-        return res.status(404).json({ error: 'Пользователь не найден.' });
-      }
-
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          email: true,
-          phone: true,
-          role: true,
-          phoneConfirmed: true,
-          createdAt: true,
-          updatedAt: true
-        }
-      });
-
-      if (!user) {
-        return res.status(404).json({ error: 'Пользователь не найден.' });
-      }
-
-      return res.json({ user });
-    } catch (error) {
-      console.error('Не удалось получить профиль пользователя', error);
-      return res.status(500).json({ error: 'Не удалось получить профиль.' });
-    }
-  });
+  app.use('/api/profile', requireAuth, profileRouter);
   app.use('/', invitationsRouter);
   app.use(express.static(ROOT_DIR, { extensions: ['html'] }));
 

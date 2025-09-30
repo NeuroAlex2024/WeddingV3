@@ -9,7 +9,12 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     if (typeof App.init === "function") {
-      App.init();
+      const maybePromise = App.init();
+      if (maybePromise && typeof maybePromise.catch === "function") {
+        maybePromise.catch((error) => {
+          console.error("Не удалось инициализировать приложение", error);
+        });
+      }
     }
   });
 })();

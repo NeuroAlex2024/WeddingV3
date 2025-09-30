@@ -134,18 +134,23 @@
       }
       return new Headers(headersInit || {});
     };
-    const basePostJson = (input, body, init = {}) => {
+    const baseSendJson = (method, input, body, init = {}) => {
       const headers = ensureHeaders(init.headers);
       if (!headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
       return baseRequest(input, {
         ...init,
-        method: init.method || "POST",
+        method,
         headers,
         body: JSON.stringify(body ?? {})
       });
     };
+    const basePostJson = (input, body, init = {}) => {
+      const method = init.method || "POST";
+      return baseSendJson(method, input, body, init);
+    };
+    const basePutJson = (input, body, init = {}) => baseSendJson("PUT", input, body, init);
     const applyAuth = (init = {}, tokenProvider) => {
       const headers = ensureHeaders(init.headers);
       const token = tokenProvider();
@@ -170,6 +175,13 @@
           role,
           isAuthenticated: true
         });
+        if (window.AppCore && typeof window.AppCore.refreshProfileFromServer === "function") {
+          try {
+            await window.AppCore.refreshProfileFromServer({ silent: true, persist: true });
+          } catch (error) {
+            console.warn("Не удалось синхронизировать профиль после авторизации", error);
+          }
+        }
       }
       return {
         ok: response.ok,
@@ -184,6 +196,7 @@
         return response.json();
       },
       postJson: basePostJson,
+      putJson: basePutJson,
       async loginWithPhone(phone, password) {
         const response = await basePostJson(
           "/api/auth/login",
@@ -194,13 +207,43 @@
       },
       async registerWithPhone(phone, password, extra = {}) {
         const payload = { phone, password };
-        if (extra && typeof extra === "object" && extra.email) {
-          payload.email = extra.email;
+        if (extra && typeof extra === "object") {
+          if (extra.email) {
+            payload.email = extra.email;
+          }
+          if (extra.role) {
+            payload.role = extra.role;
+          }
         }
         const response = await basePostJson("/api/auth/register", payload, {
           credentials: "include"
         });
         return handleAuthResponse(response);
+      },
+      async fetchProfile() {
+        const response = await baseRequest(
+          "/api/profile",
+          applyAuth({}, () => AppStores.AuthStore.getToken())
+        );
+        const data = await parseJsonSafe(response.clone());
+        return {
+          ok: response.ok,
+          status: response.status,
+          data
+        };
+      },
+      async updateProfile(profilePatch = {}) {
+        const response = await basePutJson(
+          "/api/profile",
+          profilePatch,
+          applyAuth({}, () => AppStores.AuthStore.getToken())
+        );
+        const data = await parseJsonSafe(response.clone());
+        return {
+          ok: response.ok,
+          status: response.status,
+          data
+        };
       },
       withAuth(tokenOrProvider) {
         const provider = typeof tokenOrProvider === "function" ? tokenOrProvider : () => tokenOrProvider;
@@ -213,6 +256,9 @@
           },
           postJson(input, body, init = {}) {
             return basePostJson(input, body, applyAuth(init, provider));
+          },
+          putJson(input, body, init = {}) {
+            return basePutJson(input, body, applyAuth(init, provider));
           }
         };
       }
@@ -367,18 +413,35 @@
       websiteFormOpen: null,
       websiteFormDraft: null,
       websiteFontsLoaded: new Set(),
-      routeStatus: "ok"
+      routeStatus: "ok",
+      profileSyncStatus: "idle",
+      profileSyncError: null
     },
-    init() {
+    async init() {
       this.cacheDom();
       this.bindGlobalEvents();
       this.authorizedApiClient =
         typeof this.apiClient.withAuth === "function" && this.authStore
           ? this.apiClient.withAuth(() => this.authStore.getToken())
           : this.apiClient;
-      this.refreshAuthState();
-      this.state.profile = this.loadProfile();
-      this.syncMarketplaceFavoritesFromProfile(this.state.profile);
+      const authState = this.refreshAuthState();
+      const storedProfile = this.loadProfile();
+      if (storedProfile) {
+        this.state.profile = storedProfile;
+        this.syncMarketplaceFavoritesFromProfile(storedProfile);
+      }
+      const isAuthenticated =
+        this.authStore && typeof this.authStore.isAuthenticated === "function"
+          ? this.authStore.isAuthenticated()
+          : Boolean(authState && authState.isAuthenticated);
+      if (isAuthenticated) {
+        const result = await this.refreshProfileFromServer({ silent: true, persist: true });
+        if (!result.ok && !this.state.profile) {
+          this.ensureProfile();
+        }
+      } else if (!this.state.profile) {
+        this.ensureProfile();
+      }
       const initialHash = location.hash;
       const roleDefaultRoute = this.getDefaultRouteForRole(this.state.currentRole);
       if (initialHash === "#/welcome") {
@@ -460,6 +523,119 @@
       const [firstPublic] = Array.from(this.publicRoutes);
       return firstPublic || INITIAL_ROUTE;
     },
+    getServerProfileSnapshot(profile = this.state.profile) {
+      const source = profile ?? this.state.profile;
+      if (!source || typeof source !== "object") {
+        return null;
+      }
+      if (source.serverProfile && typeof source.serverProfile === "object") {
+        return source.serverProfile;
+      }
+      return null;
+    },
+    getActiveServerProfile(snapshot, role) {
+      if (!snapshot || typeof snapshot !== "object") {
+        return null;
+      }
+      const normalizedRole = this.normalizeRole(role || snapshot?.user?.role);
+      if (normalizedRole === "contractor") {
+        if (snapshot.profile && typeof snapshot.profile === "object" && snapshot.profile.companyName !== undefined) {
+          return snapshot.profile;
+        }
+        return snapshot.contractorProfile || null;
+      }
+      if (snapshot.profile && typeof snapshot.profile === "object" && snapshot.profile.coupleNames !== undefined) {
+        return snapshot.profile;
+      }
+      return snapshot.weddingProfile || null;
+    },
+    mergeServerProfile(currentProfile, payload) {
+      const baseProfile =
+        currentProfile && typeof currentProfile === "object"
+          ? { ...currentProfile }
+          : this.createLocalFallbackProfile();
+      if (!payload || typeof payload !== "object") {
+        return baseProfile;
+      }
+      const user = payload.user && typeof payload.user === "object" ? { ...payload.user } : null;
+      const normalizedRole = this.normalizeRole(user?.role || baseProfile.role || this.state.currentRole);
+      const contractorProfileCandidate =
+        normalizedRole === "contractor"
+          ? payload.profile && typeof payload.profile === "object"
+            ? payload.profile
+            : payload.contractorProfile
+          : payload.contractorProfile;
+      const weddingProfileCandidate =
+        normalizedRole === "contractor"
+          ? payload.weddingProfile
+          : payload.profile && typeof payload.profile === "object"
+          ? payload.profile
+          : payload.weddingProfile;
+      baseProfile.serverProfile = {
+        ...payload,
+        contractorProfile: contractorProfileCandidate || null,
+        weddingProfile: weddingProfileCandidate || null
+      };
+      if (user) {
+        baseProfile.user = user;
+        baseProfile.role = normalizedRole;
+      }
+      if (contractorProfileCandidate && typeof contractorProfileCandidate === "object") {
+        baseProfile.contractorProfile = { ...contractorProfileCandidate };
+        if (Object.prototype.hasOwnProperty.call(contractorProfileCandidate, "companyName")) {
+          baseProfile.companyName = contractorProfileCandidate.companyName ?? "";
+        }
+        if (Object.prototype.hasOwnProperty.call(contractorProfileCandidate, "description")) {
+          baseProfile.contractorDescription = contractorProfileCandidate.description ?? null;
+        }
+      }
+      if (weddingProfileCandidate && typeof weddingProfileCandidate === "object") {
+        baseProfile.weddingProfile = { ...weddingProfileCandidate };
+        if (Object.prototype.hasOwnProperty.call(weddingProfileCandidate, "coupleNames")) {
+          baseProfile.coupleNames = weddingProfileCandidate.coupleNames ?? "";
+        }
+        if (Object.prototype.hasOwnProperty.call(weddingProfileCandidate, "location")) {
+          baseProfile.location = weddingProfileCandidate.location ?? "";
+        }
+        if (Object.prototype.hasOwnProperty.call(weddingProfileCandidate, "eventDate")) {
+          baseProfile.eventDate = weddingProfileCandidate.eventDate ?? null;
+        }
+      }
+      baseProfile.schemaVersion = PROFILE_SCHEMA_VERSION;
+      baseProfile.updatedAt = Date.now();
+      return baseProfile;
+    },
+    applyServerProfilePayload(payload, { persist = false } = {}) {
+      const currentProfile = this.state.profile || this.loadProfile();
+      const mergedProfile = this.mergeServerProfile(currentProfile, payload);
+      if (persist) {
+        try {
+          const savedProfile = this.profileStore.save(mergedProfile);
+          this.state.profile = savedProfile;
+        } catch (error) {
+          console.error("Не удалось сохранить профиль", error);
+          this.state.profile = mergedProfile;
+        }
+      } else {
+        this.state.profile = mergedProfile;
+      }
+      this.syncMarketplaceFavoritesFromProfile(this.state.profile);
+      return this.state.profile;
+    },
+    formatServerEventDate(value) {
+      if (!value) {
+        return "";
+      }
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return "";
+      }
+      return date.toLocaleDateString("ru-RU", {
+        day: "numeric",
+        month: "long",
+        year: "numeric"
+      });
+    },
     refreshAuthState() {
       if (!this.authStore) {
         this.state.auth = { ...this.defaultAuthState };
@@ -497,10 +673,64 @@
       }
       return this.apiClient;
     },
+    async refreshProfileFromServer(options = {}) {
+      const { silent = false, persist = true } = options;
+      if (!this.apiClient || typeof this.apiClient.fetchProfile !== "function") {
+        return { ok: false, reason: "unavailable" };
+      }
+      try {
+        const response = await this.apiClient.fetchProfile();
+        if (response.ok && response.data) {
+          const merged = this.applyServerProfilePayload(response.data, { persist });
+          this.state.profileSyncStatus = "ok";
+          this.state.profileSyncError = null;
+          return { ok: true, data: merged };
+        }
+        if (response.status === 503) {
+          this.state.profileSyncStatus = "degraded";
+          this.state.profileSyncError = "database_unavailable";
+          if (!silent) {
+            console.warn("Сервер профиля временно недоступен. Используются сохранённые данные.");
+          }
+        }
+        return { ok: false, status: response.status, data: response.data };
+      } catch (error) {
+        console.error("Не удалось запросить профиль", error);
+        this.state.profileSyncStatus = "degraded";
+        this.state.profileSyncError = "network_error";
+        if (!silent) {
+          console.warn("Используются сохранённые данные профиля из-за ошибки соединения.");
+        }
+        return { ok: false, error };
+      }
+    },
+    async updateServerProfile(patch = {}, options = {}) {
+      if (!patch || typeof patch !== "object") {
+        return { ok: false, reason: "invalid_patch" };
+      }
+      if (!this.apiClient || typeof this.apiClient.updateProfile !== "function") {
+        return { ok: false, reason: "unavailable" };
+      }
+      const persist = options.persist !== false;
+      try {
+        const response = await this.apiClient.updateProfile(patch);
+        if (response.ok && response.data) {
+          const merged = this.applyServerProfilePayload(response.data, { persist });
+          return { ok: true, data: merged };
+        }
+        return { ok: false, status: response.status, data: response.data };
+      } catch (error) {
+        console.error("Не удалось обновить профиль на сервере", error);
+        return { ok: false, error };
+      }
+    },
     handleRouteChange() {
       const hash = location.hash || this.getDefaultRouteForRole(this.state.currentRole);
       const authState = this.refreshAuthState();
-      this.state.profile = this.loadProfile();
+      const storedProfile = this.state.profile || this.loadProfile();
+      if (!this.state.profile && storedProfile) {
+        this.state.profile = storedProfile;
+      }
       this.syncMarketplaceFavoritesFromProfile(this.state.profile);
       const role = this.state.currentRole;
       const defaultRoute = this.getDefaultRouteForRole(role);
@@ -918,19 +1148,18 @@
         location.hash = "#/dashboard";
       }, 1200);
     },
-    ensureProfile() {
-      if (this.state.profile) return;
-      const now = Date.now();
-      const currentYear = new Date().getFullYear();
-      const profile = {
+    createLocalFallbackProfile(timestamp = Date.now()) {
+      const now = typeof timestamp === "number" ? timestamp : Date.now();
+      const currentDate = new Date(now);
+      const fallbackProfile = {
         schemaVersion: PROFILE_SCHEMA_VERSION,
         weddingId: now.toString(),
         vibe: [],
         style: "",
         venueBooked: false,
         city: "",
-        year: currentYear,
-        month: new Date().getMonth() + 1,
+        year: currentDate.getFullYear(),
+        month: currentDate.getMonth() + 1,
         budgetRange: "",
         guests: null,
         quizCompleted: false,
@@ -939,10 +1168,26 @@
         checklist: DEFAULT_CHECKLIST_ITEMS.map((item) => ({ ...item })),
         checklistFolders: DEFAULT_CHECKLIST_FOLDERS.map((item) => ({ ...item })),
         budgetEntries: DEFAULT_BUDGET_ENTRIES.map((item) => ({ ...item })),
-        marketplaceFavorites: []
+        marketplaceFavorites: [],
+        serverProfile: null,
+        role: this.state.currentRole || this.defaultAuthState.role
       };
-      profile.websiteInvitation = this.createDefaultWebsiteInvitation(now);
-      this.saveProfile(profile);
+      fallbackProfile.websiteInvitation = this.createDefaultWebsiteInvitation(now);
+      return fallbackProfile;
+    },
+    ensureProfile() {
+      if (this.state.profile) {
+        return this.state.profile;
+      }
+      const storedProfile = this.loadProfile();
+      if (storedProfile) {
+        this.state.profile = storedProfile;
+        this.syncMarketplaceFavoritesFromProfile(storedProfile);
+        return storedProfile;
+      }
+      const fallbackProfile = this.createLocalFallbackProfile();
+      this.saveProfile(fallbackProfile);
+      return fallbackProfile;
     },
     ensureDashboardData() {
       const profile = this.state.profile;
@@ -3289,6 +3534,8 @@
       this.state.profile = null;
       this.state.marketplaceFavorites = new Set();
       this.state.marketplaceSelections = {};
+      this.state.profileSyncStatus = "idle";
+      this.state.profileSyncError = null;
     },
     bindMusicToggle() {
       const toggle = this.appEl.querySelector('[data-action="website-music-toggle"]');
