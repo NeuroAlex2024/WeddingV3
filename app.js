@@ -106,9 +106,6 @@
   const App = {
     storageKey,
     allowedRoutes,
-    monthNames,
-    BUDGET_COLORS,
-    PROFILE_SCHEMA_VERSION,
     state: {
       profile: null,
       currentRoute: "#/dashboard",
@@ -187,6 +184,78 @@
         }
       };
       window.addEventListener("resize", this.handleBudgetResize);
+    },
+    handleRouteChange() {
+      const hash = location.hash || "#/dashboard";
+      this.state.profile = this.loadProfile();
+      this.syncMarketplaceFavoritesFromProfile(this.state.profile);
+      if (hash === "#/welcome") {
+        location.replace("#/dashboard");
+        return;
+      }
+      if (!this.allowedRoutes.includes(hash)) {
+        location.replace("#/dashboard");
+        return;
+      }
+      this.state.currentRoute = hash;
+      if (hash !== "#/quiz") {
+        this.state.currentStep = 0;
+      }
+      this.render();
+    },
+    render() {
+      switch (this.state.currentRoute) {
+        case "#/quiz":
+          this.renderQuiz();
+          break;
+        case "#/website":
+          this.renderWebsiteDesigner();
+          break;
+        case "#/dashboard":
+          this.renderDashboard();
+          break;
+        default:
+          this.renderDashboard();
+      }
+    },
+    renderQuiz() {
+      this.teardownChecklistFocusTrap();
+      document.body.classList.remove("checklist-expanded");
+      if (this.state.isChecklistExpanded) {
+        this.state.isChecklistExpanded = false;
+        this.resetChecklistEditing();
+      }
+      this.state.websiteFormOpen = null;
+      this.state.websiteFormDraft = null;
+      this.ensureProfile();
+      this.appEl.innerHTML = `
+        <section class="card">
+          <h1>Подбор профиля свадьбы</h1>
+          <p>Ответьте на вопросы — мы настроим рекомендации под ваш стиль, город и бюджет.</p>
+          <div class="progress" aria-hidden="true">
+            <div class="progress__bar" id="quiz-progress"></div>
+          </div>
+          <p class="step-message" id="quiz-message" role="alert"></p>
+          <div class="quiz-step" id="quiz-step"></div>
+          <div class="actions">
+            <button type="button" class="secondary" id="quiz-back">Назад</button>
+            <button type="button" id="quiz-next">Далее</button>
+          </div>
+        </section>
+      `;
+      this.quizStepEl = document.getElementById("quiz-step");
+      this.quizMessageEl = document.getElementById("quiz-message");
+      this.progressBarEl = document.getElementById("quiz-progress");
+      document.getElementById("quiz-back").addEventListener("click", () => {
+        if (this.state.currentStep > 0) {
+          this.state.currentStep -= 1;
+          this.updateQuizView();
+        }
+      });
+      document.getElementById("quiz-next").addEventListener("click", () => {
+        this.handleQuizNext();
+      });
+      this.updateQuizView();
     },
     quizSteps: [],
     ensureQuizSteps() {
@@ -323,7 +392,7 @@
             <div>
               <label for="quiz-month">Выберите месяц</label>
               <select id="quiz-month" required>
-                ${(this.monthNames || []).map((name, index) => `
+                ${monthNames.map((name, index) => `
                   <option value="${index + 1}" ${profile.month === index + 1 ? "selected" : ""}>${name}</option>
                 `).join("")}
               </select>
@@ -398,7 +467,7 @@
         `Стиль: <strong>${profile.style || "—"}</strong>`,
         `Место забронировано: <strong>${profile.venueBooked ? "Да" : "Нет"}</strong>`,
         `Город: <strong>${profile.city || "—"}</strong>`,
-        `Дата: <strong>${profile.month ? (this.monthNames || [])[profile.month - 1] : "—"} ${profile.year || ""}</strong>`,
+        `Дата: <strong>${profile.month ? monthNames[profile.month - 1] : "—"} ${profile.year || ""}</strong>`,
         `Бюджет: <strong>${profile.budgetRange || "—"}</strong>`,
         `Гостей: <strong>${profile.guests || "—"}</strong>`
       ];
@@ -532,7 +601,7 @@
       const now = Date.now();
       const currentYear = new Date().getFullYear();
       const profile = {
-        schemaVersion: this.PROFILE_SCHEMA_VERSION,
+        schemaVersion: PROFILE_SCHEMA_VERSION,
         weddingId: now.toString(),
         vibe: [],
         style: "",
@@ -636,6 +705,252 @@
         this.saveProfile({ ...profile });
       }
     },
+    renderDashboard() {
+      this.ensureProfile();
+      this.ensureDashboardData();
+      this.state.websiteFormOpen = null;
+      this.state.websiteFormDraft = null;
+      this.teardownChecklistFocusTrap();
+      const profile = this.state.profile;
+      const hasProfile = Boolean(profile);
+      const quizCompleted = Boolean(profile && profile.quizCompleted);
+      const summaryItems = [];
+      if (hasProfile && profile.vibe && profile.vibe.length) {
+        summaryItems.push(`Атмосфера: ${profile.vibe.join(", ")}`);
+      }
+      if (hasProfile && profile.style) {
+        summaryItems.push(`Стиль: ${profile.style}`);
+      }
+      if (hasProfile && profile.city) {
+        summaryItems.push(`Город: ${profile.city}`);
+      }
+      if (hasProfile && quizCompleted && profile.guests) {
+        summaryItems.push(`Гостей: ${profile.guests}`);
+      }
+      if (hasProfile && profile.budgetRange) {
+        summaryItems.push(`Бюджет: ${profile.budgetRange}`);
+      }
+      const summaryLine = summaryItems.length
+        ? `<div class="summary-line">${summaryItems.map((item) => `<span>${item}</span>`).join("")}</div>`
+        : "";
+      const summaryFallback = "";
+      const introBlock = hasProfile ? summaryLine || summaryFallback : "";
+      const heading = hasProfile
+        ? `${profile.groomName || "Жених"} + ${profile.brideName || "Невеста"}, добро пожаловать!`
+        : "Планирование свадьбы без стресса";
+      const headingSubtext = hasProfile
+        ? `<p class="dashboard-subtitle">Здесь вы можете собрать все необходимое для свадьбы мечты.</p>`
+        : "";
+      const heroImage = `
+        <div class="dashboard-hero-image">
+          <img src="https://images.unsplash.com/photo-1542379510-1026e928ed4f?q=80&w=3118&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D" alt="Счастливая пара на свадьбе">
+        </div>
+      `;
+      const daysBlock = hasProfile ? this.renderCountdown(profile) : "";
+      const navItems = DASHBOARD_NAV_ITEMS.map((item) => `
+        <button type="button" class="dashboard-nav__item" data-modal-target="${item.id}" data-title="${item.title}">
+          ${item.title}
+        </button>
+      `).join("");
+      const toolsCards = DASHBOARD_TOOL_ITEMS.map((item) => {
+        let extraAttributes = "";
+        if (item.id === "tools-test") {
+          extraAttributes += ' data-tool-type="quiz"';
+        }
+        if (item.id === "tools-website") {
+          extraAttributes += ' data-route="#/website"';
+        }
+        return `
+        <button type="button" class="tool-card" data-modal-target="${item.id}" data-title="${item.title}"${extraAttributes}>
+          <span class="tool-card__title">${item.title}</span>
+          <span class="tool-card__description">${item.description}</span>
+        </button>
+      `;
+      }).join("");
+      const isChecklistExpanded = Boolean(this.state.isChecklistExpanded);
+      const checklistOverlay = isChecklistExpanded
+        ? '<button type="button" class="checklist-overlay" data-action="collapse-checklist" aria-label="Свернуть чек лист"></button>'
+        : "";
+      const checklistContainerClasses = [
+        "dashboard-module",
+        "checklist",
+        isChecklistExpanded ? "checklist--expanded" : ""
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const modulesClasses = [
+        "dashboard-modules",
+        isChecklistExpanded ? "dashboard-modules--checklist-expanded" : ""
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const expandLabel = isChecklistExpanded ? "Свернуть чек лист" : "Развернуть чек лист";
+      const expandIcon = isChecklistExpanded ? "✕" : "⤢";
+      const backgroundInertAttributes = isChecklistExpanded ? ' aria-hidden="true" tabindex="-1"' : "";
+      const checklistEditingId = this.state.checklistEditingId;
+      const checklistDraft = this.state.checklistEditingDraft || {};
+      const { tasks: checklistTasks, folders: checklistFolders } = this.getChecklistCollections(profile);
+      this.syncChecklistFolderCollapse(checklistFolders);
+      const checklistItems = this.renderChecklistItems(checklistTasks, checklistFolders);
+      const budgetEntries = Array.isArray(profile?.budgetEntries) ? profile.budgetEntries : [];
+      const decoratedBudgetEntries = budgetEntries.map((entry, index) => {
+        const amountValue = Number(entry.amount);
+        const amount = Number.isFinite(amountValue) ? Math.max(0, Math.round(amountValue)) : 0;
+        const color = BUDGET_COLORS[index % BUDGET_COLORS.length];
+        return {
+          ...entry,
+          color,
+          amount
+        };
+      });
+      const totalBudget = decoratedBudgetEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+      const previousTotal = this.state.lastBudgetTotal || 0;
+      this.state.lastBudgetTotal = totalBudget;
+      const positiveEntries = decoratedBudgetEntries.filter((entry) => Number(entry.amount) > 0);
+      let startAngle = 0;
+      const segments = positiveEntries.map((entry, index) => {
+        const fraction = totalBudget > 0 ? Number(entry.amount) / totalBudget : 0;
+        const endAngle = index === positiveEntries.length - 1 ? 360 : startAngle + fraction * 360;
+        const segment = `${entry.color} ${startAngle.toFixed(2)}deg ${endAngle.toFixed(2)}deg`;
+        startAngle = endAngle;
+        return segment;
+      });
+      const chartBackground = segments.length
+        ? `conic-gradient(from -90deg, ${segments.join(", ")})`
+        : "conic-gradient(from -90deg, rgba(224, 122, 139, 0.25) 0deg 360deg)";
+      const budgetVisual = decoratedBudgetEntries.length
+        ? decoratedBudgetEntries
+            .map((entry, index) => {
+              const amount = Number(entry.amount || 0);
+              const displayId = `budget-amount-${entry.id || index}`;
+              const isEditing = this.state.budgetEditingId === entry.id;
+              if (isEditing) {
+                const draft = this.state.budgetEditingDraft || {
+                  title: entry.title || "",
+                  amount: String(amount ?? "")
+                };
+                return `
+                  <div class="budget-visual__item budget-visual__item--editing" data-entry-id="${this.escapeHtml(entry.id)}">
+                    <form class="budget-visual__edit" data-entry-id="${this.escapeHtml(entry.id)}">
+                      <div class="budget-visual__edit-fields">
+                        <span class="budget-visual__dot" style="--dot-color: ${entry.color}" aria-hidden="true"></span>
+                        <div class="budget-visual__field">
+                          <label for="budget-edit-title-${this.escapeHtml(entry.id)}" class="sr-only">Название статьи</label>
+                          <input id="budget-edit-title-${this.escapeHtml(entry.id)}" type="text" name="title" value="${this.escapeHtml(draft.title || "")}" required>
+                        </div>
+                        <div class="budget-visual__field">
+                          <label for="budget-edit-amount-${this.escapeHtml(entry.id)}" class="sr-only">Сумма</label>
+                          <input id="budget-edit-amount-${this.escapeHtml(entry.id)}" type="number" name="amount" value="${this.escapeHtml(String(draft.amount ?? ""))}" min="0" step="1000" required>
+                        </div>
+                      </div>
+                      <div class="budget-visual__edit-actions">
+                        <button type="submit">Сохранить</button>
+                        <button type="button" class="secondary" data-action="cancel-edit">Отменить</button>
+                      </div>
+                    </form>
+                  </div>
+                `;
+              }
+              return `
+                <div class="budget-visual__item" data-entry-id="${this.escapeHtml(entry.id)}">
+                  <div class="budget-visual__info">
+                    <span class="budget-visual__dot" style="--dot-color: ${entry.color}" aria-hidden="true"></span>
+                    <span class="budget-visual__title">${this.escapeHtml(entry.title || "")}</span>
+                    <span class="budget-visual__amount" id="${this.escapeHtml(displayId)}" data-amount="${amount}">${this.formatCurrency(amount)}</span>
+                    <div class="budget-visual__actions">
+                      <button type="button" class="budget-visual__action" data-action="edit" data-entry-id="${this.escapeHtml(entry.id)}" aria-label="Редактировать статью">
+                        <span aria-hidden="true">✏️</span>
+                        <span class="sr-only">Изменить</span>
+                      </button>
+                      <button type="button" class="budget-visual__action budget-visual__action--danger" data-action="delete" data-entry-id="${this.escapeHtml(entry.id)}" aria-label="Удалить статью">
+                        <span aria-hidden="true">🗑️</span>
+                        <span class="sr-only">Удалить</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="budget-visual__track">
+                    <div class="budget-visual__bar" data-value="${amount}" data-total="${totalBudget}" style="--bar-color: ${entry.color}"></div>
+                  </div>
+                </div>
+              `;
+            })
+            .join("")
+        : '<p class="budget-empty">Добавьте статьи, чтобы увидеть распределение бюджета.</p>';
+      const marketplaceModule = this.renderMarketplaceModule(backgroundInertAttributes);
+      this.appEl.innerHTML = `
+        <section class="card dashboard">
+          <nav class="dashboard-nav" aria-label="Основные разделы">
+            ${navItems}
+          </nav>
+          ${heroImage}
+          <header class="dashboard-header">
+            <h1>${heading}</h1>
+            ${headingSubtext}
+            ${introBlock}
+            ${daysBlock}
+          </header>
+          <div class="${modulesClasses}">
+            ${checklistOverlay}
+            <section class="${checklistContainerClasses}" data-area="checklist" aria-labelledby="checklist-title" data-expanded="${isChecklistExpanded}">
+              <div class="module-header">
+                <h2 id="checklist-title">Чек лист</h2>
+                <div class="module-header__actions">
+                  <button type="button" class="module-header__icon-button" data-action="create-checklist-folder" aria-label="Создать папку" title="Создать папку">
+                    <span aria-hidden="true">📁</span>
+                  </button>
+                  <button type="button" class="module-header__icon-button" data-action="toggle-checklist-expand" aria-label="${expandLabel}" aria-expanded="${isChecklistExpanded}">
+                    <span aria-hidden="true">${expandIcon}</span>
+                  </button>
+                </div>
+              </div>
+              <ul class="checklist-items">
+                ${checklistItems}
+              </ul>
+              <form id="checklist-form" class="checklist-form" data-prevent-expand>
+                <label for="checklist-input" class="sr-only">Новая задача</label>
+                <input id="checklist-input" type="text" name="task" placeholder="Добавить задачу" autocomplete="off" required>
+                <button type="submit">Добавить</button>
+              </form>
+            </section>
+            <section class="dashboard-module tools" data-area="tools" aria-labelledby="tools-title"${backgroundInertAttributes}>
+              <div class="module-header">
+                <h2 id="tools-title">Инструменты</h2>
+              </div>
+              <div class="tools-grid">
+                ${toolsCards}
+              </div>
+            </section>
+            <section class="dashboard-module budget" data-area="budget" aria-labelledby="budget-title"${backgroundInertAttributes}>
+              <div class="module-header">
+                <h2 id="budget-title">Бюджет</h2>
+              </div>
+              <div class="budget-summary">
+                <div class="budget-summary__chart" role="img" aria-label="Итоговый бюджет: ${this.formatCurrency(totalBudget)}" style="--budget-chart-bg: ${chartBackground};">
+                  <div class="budget-summary__total">
+                    <span class="budget-summary__value" id="budget-total" data-previous="${previousTotal}">${this.formatCurrency(totalBudget)}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="budget-visual">
+                ${budgetVisual}
+              </div>
+              <form id="budget-form" class="budget-form">
+                <div class="budget-form__fields">
+                  <label for="budget-title" class="sr-only">Название статьи расходов</label>
+                  <input id="budget-title" type="text" name="title" placeholder="Название" required>
+                  <label for="budget-amount" class="sr-only">Сумма</label>
+                  <input id="budget-amount" type="number" name="amount" placeholder="Сумма" min="0" step="1000" required>
+                </div>
+                <button type="submit">Добавить расход</button>
+              </form>
+            </section>
+            ${marketplaceModule}
+          </div>
+        </section>
+      `;
+      document.body.classList.toggle("checklist-expanded", this.state.isChecklistExpanded);
+      this.bindDashboardEvents(previousTotal, totalBudget);
+    },
     updateWebsitePreview() {
       const profile = this.state.profile || {};
       const invitation = this.ensureWebsiteInvitationData() || this.createDefaultWebsiteInvitation();
@@ -659,6 +974,60 @@
         }
       }
       this.bindMusicToggle();
+    },
+    renderWebsiteDesigner() {
+      this.ensureProfile();
+      this.teardownChecklistFocusTrap();
+      document.body.classList.remove("checklist-expanded");
+      const profile = this.state.profile || {};
+      const invitation = this.ensureWebsiteInvitationData() || this.createDefaultWebsiteInvitation();
+      const theme = this.resolveWebsiteTheme(invitation.theme);
+      this.ensureWebsiteThemeFonts(theme);
+      const isComplete = this.isWebsiteInvitationComplete(invitation);
+      if (typeof this.state.websiteFormOpen !== "boolean") {
+        this.state.websiteFormOpen = !isComplete;
+      }
+      const showForm = Boolean(this.state.websiteFormOpen);
+      const themeStyle = this.buildWebsiteThemeStyle(theme);
+      const previewMarkup = this.renderWebsitePreview(invitation, theme, isComplete);
+      const themesMarkup = this.renderWebsiteThemes(invitation.theme);
+      const summaryMarkup = this.renderWebsiteSummary(invitation);
+      const formOverlay = showForm ? this.renderWebsiteForm(invitation, profile) : "";
+      const disableActionsAttr = isComplete ? "" : " disabled";
+      this.appEl.innerHTML = `
+        <section class="website-designer-page">
+          <header class="website-designer__header card">
+            <div class="website-designer__header-left">
+              <button type="button" class="secondary website-designer__back" data-action="website-back">← К инструментам</button>
+              <div class="website-designer__title">
+                <h1>Сайт-приглашение</h1>
+                <p>Создайте персональную страницу свадьбы и поделитесь ею с гостями.</p>
+              </div>
+            </div>
+            <div class="website-designer__actions">
+              <button type="button" data-action="website-activate"${disableActionsAttr}>Активировать сайт</button>
+              <button type="button" class="secondary" data-action="website-export"${disableActionsAttr}>Сохранить PDF</button>
+            </div>
+          </header>
+          <div class="website-designer__layout">
+            <div class="website-designer__preview card" data-theme="${this.escapeHtml(theme.id)}" style="${themeStyle}">
+              ${previewMarkup}
+            </div>
+            <aside class="website-designer__sidebar card">
+              <h2>Оформление</h2>
+              <p>Выберите стиль, который отражает настроение вашего праздника.</p>
+              <div class="website-themes">${themesMarkup}</div>
+              <div class="website-summary">
+                <h3>Детали события</h3>
+                ${summaryMarkup}
+                <button type="button" class="secondary website-summary__edit" data-action="website-edit">Изменить данные</button>
+              </div>
+            </aside>
+          </div>
+          ${formOverlay}
+        </section>
+      `;
+      this.bindWebsiteDesignerEvents(invitation, isComplete, theme);
     },
     ensureWebsiteThemeFonts(theme) {
       if (!theme || typeof theme !== "object" || !theme.fontLink) {
@@ -1211,8 +1580,7 @@
       }
       const day = date.getDate();
       const monthIndex = date.getMonth();
-      const monthList = this.monthNames || [];
-      const monthName = monthList[monthIndex] || "";
+      const monthName = monthNames[monthIndex] || "";
       const year = date.getFullYear();
       return `${day} ${monthName.toLowerCase()} ${year}`.trim();
     },
@@ -3280,8 +3648,8 @@
       const updated =
         normalized.updated ||
         websiteNormalization.updated ||
-        next.schemaVersion !== this.PROFILE_SCHEMA_VERSION;
-      next.schemaVersion = this.PROFILE_SCHEMA_VERSION;
+        next.schemaVersion !== PROFILE_SCHEMA_VERSION;
+      next.schemaVersion = PROFILE_SCHEMA_VERSION;
       if (!next.createdAt) {
         next.createdAt = Date.now();
       }
@@ -3440,6 +3808,80 @@
       };
       requestAnimationFrame(animate);
     },
+    loadProfile() {
+      try {
+        const raw = localStorage.getItem(this.storageKey);
+        if (!raw) return null;
+        const profile = JSON.parse(raw);
+        if (!profile || typeof profile !== "object") {
+          return null;
+        }
+        if (profile.schemaVersion !== PROFILE_SCHEMA_VERSION) {
+          const { profile: upgradedProfile, updated } = this.upgradeProfile(profile);
+          if (!upgradedProfile) {
+            return null;
+          }
+          if (updated) {
+            this.saveProfile(upgradedProfile);
+          } else {
+            this.state.profile = upgradedProfile;
+          }
+          return upgradedProfile;
+        }
+        const normalizedChecklist = this.normalizeChecklistData(profile);
+        let nextProfile = { ...profile };
+        let needsSave = false;
+        if (normalizedChecklist.updated) {
+          nextProfile.checklist = normalizedChecklist.checklist;
+          nextProfile.checklistFolders = normalizedChecklist.checklistFolders;
+          needsSave = true;
+        }
+        const websiteNormalization = this.normalizeWebsiteInvitation(nextProfile.websiteInvitation, Date.now());
+        if (!nextProfile.websiteInvitation || websiteNormalization.updated) {
+          nextProfile.websiteInvitation = websiteNormalization.invitation;
+          needsSave = true;
+        } else {
+          nextProfile.websiteInvitation = websiteNormalization.invitation;
+        }
+        if (needsSave) {
+          nextProfile = {
+            ...nextProfile,
+            schemaVersion: PROFILE_SCHEMA_VERSION,
+            updatedAt: Date.now()
+          };
+          this.saveProfile(nextProfile);
+        }
+        return nextProfile;
+      } catch (error) {
+        console.error("Не удалось загрузить профиль", error);
+        return null;
+      }
+    },
+    saveProfile(profile) {
+      try {
+        localStorage.setItem(this.storageKey, JSON.stringify(profile));
+        this.state.profile = profile;
+        this.syncMarketplaceFavoritesFromProfile(profile);
+      } catch (error) {
+        console.error("Не удалось сохранить профиль", error);
+      }
+    },
+    updateProfile(patch) {
+      const current = this.state.profile || {};
+      const next = {
+        ...current,
+        ...patch,
+        updatedAt: Date.now(),
+        schemaVersion: PROFILE_SCHEMA_VERSION
+      };
+      this.saveProfile(next);
+    },
+    clearProfile() {
+      localStorage.removeItem(this.storageKey);
+      this.state.profile = null;
+      this.state.marketplaceFavorites = new Set();
+      this.state.marketplaceSelections = {};
+    },
     bindMusicToggle() {
       const toggle = this.appEl.querySelector('[data-action="website-music-toggle"]');
       if (!toggle) {
@@ -3482,27 +3924,6 @@
       });
     }
   };
-
-  if (window.ProfileStorage && typeof window.ProfileStorage.attach === "function") {
-    window.ProfileStorage.attach(App);
-  }
-
-  if (window.AppRouter && typeof window.AppRouter.attach === "function") {
-    window.AppRouter.attach(App);
-  }
-
-  if (window.AppViews) {
-    const { attachQuiz, attachDashboard, attachWebsite } = window.AppViews;
-    if (typeof attachQuiz === "function") {
-      attachQuiz(App);
-    }
-    if (typeof attachDashboard === "function") {
-      attachDashboard(App);
-    }
-    if (typeof attachWebsite === "function") {
-      attachWebsite(App);
-    }
-  }
 
   window.App = App;
   
