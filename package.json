@@ -6,9 +6,6 @@
   "scripts": {
     "start": "node src/server/index.js",
     "dev": "nodemon src/server/index.js",
-    "dev:frontend": "node scripts/build-frontend.mjs --watch",
-    "build": "node scripts/build-frontend.mjs",
-    "preview": "node scripts/preview-frontend.mjs",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },
