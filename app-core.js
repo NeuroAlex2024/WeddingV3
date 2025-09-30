@@ -1,6 +1,182 @@
 (function () {
-  const storageKey = "wedding_profile_v1";
-  const allowedRoutes = ["#/quiz", "#/dashboard", "#/website"];
+  const PROFILE_STORAGE_KEY = "wedding_profile_v1";
+  const AUTH_STORAGE_KEY = "wedding_auth_state_v1";
+  const DEFAULT_AUTH_STATE = {
+    isAuthenticated: false,
+    token: null,
+    role: "guest",
+    user: null
+  };
+
+  const ROUTE_ACCESS_BY_ROLE = {
+    guest: new Set(["#/quiz"]),
+    planner: new Set(["#/quiz", "#/dashboard", "#/website"]),
+    admin: new Set(["#/quiz", "#/dashboard", "#/website"])
+  };
+  const PUBLIC_ROUTES = new Set(["#/quiz"]);
+  const DEFAULT_ROUTE_BY_ROLE = {
+    guest: "#/quiz",
+    planner: "#/dashboard",
+    admin: "#/dashboard"
+  };
+  const allowedRoutes = Array.from(
+    new Set(
+      Object.values(ROUTE_ACCESS_BY_ROLE).reduce((allRoutes, roleRoutes) => {
+        roleRoutes.forEach((route) => allRoutes.add(route));
+        return allRoutes;
+      }, new Set())
+    )
+  );
+  const INITIAL_ROUTE = DEFAULT_ROUTE_BY_ROLE.guest;
+
+  const AppStores = (() => {
+    if (window.AppStores && window.AppStores.AuthStore && window.AppStores.ProfileStore) {
+      return window.AppStores;
+    }
+
+    const ProfileStore = {
+      key: PROFILE_STORAGE_KEY,
+      load() {
+        const raw = localStorage.getItem(this.key);
+        if (!raw) {
+          return null;
+        }
+        return JSON.parse(raw);
+      },
+      save(profile) {
+        localStorage.setItem(this.key, JSON.stringify(profile));
+        return profile;
+      },
+      update(updater) {
+        const current = this.load();
+        const base = current && typeof current === "object" ? current : {};
+        const next = typeof updater === "function" ? updater(base) : { ...base, ...updater };
+        this.save(next);
+        return next;
+      },
+      clear() {
+        localStorage.removeItem(this.key);
+      }
+    };
+
+    const AuthStore = {
+      key: AUTH_STORAGE_KEY,
+      getState() {
+        try {
+          const raw = localStorage.getItem(this.key);
+          if (!raw) {
+            return { ...DEFAULT_AUTH_STATE };
+          }
+          const parsed = JSON.parse(raw);
+          return {
+            ...DEFAULT_AUTH_STATE,
+            ...(parsed && typeof parsed === "object" ? parsed : {})
+          };
+        } catch (error) {
+          console.error("Не удалось загрузить данные авторизации", error);
+          return { ...DEFAULT_AUTH_STATE };
+        }
+      },
+      save(state) {
+        const nextState = {
+          ...DEFAULT_AUTH_STATE,
+          ...(state && typeof state === "object" ? state : {})
+        };
+        localStorage.setItem(this.key, JSON.stringify(nextState));
+        return nextState;
+      },
+      update(updater) {
+        const current = this.getState();
+        const next = typeof updater === "function" ? updater(current) : { ...current, ...updater };
+        return this.save(next);
+      },
+      clear() {
+        localStorage.removeItem(this.key);
+        return { ...DEFAULT_AUTH_STATE };
+      },
+      setToken(token, extra = {}) {
+        return this.save({
+          ...extra,
+          token: token ?? null,
+          isAuthenticated: Boolean(token) || Boolean(extra.isAuthenticated)
+        });
+      },
+      isAuthenticated() {
+        const state = this.getState();
+        return Boolean(state.token) || Boolean(state.isAuthenticated);
+      },
+      getRole() {
+        const state = this.getState();
+        return state.role || DEFAULT_AUTH_STATE.role;
+      },
+      getToken() {
+        const state = this.getState();
+        return state.token || null;
+      }
+    };
+
+    return { AuthStore, ProfileStore };
+  })();
+
+  window.AppStores = AppStores;
+
+  const ApiClient = window.ApiClient || (() => {
+    const baseRequest = (input, init = {}) => fetch(input, init);
+    const ensureHeaders = (headersInit) => {
+      if (headersInit instanceof Headers) {
+        return new Headers(headersInit);
+      }
+      return new Headers(headersInit || {});
+    };
+    const basePostJson = (input, body, init = {}) => {
+      const headers = ensureHeaders(init.headers);
+      if (!headers.has("Content-Type")) {
+        headers.set("Content-Type", "application/json");
+      }
+      return baseRequest(input, {
+        ...init,
+        method: init.method || "POST",
+        headers,
+        body: JSON.stringify(body ?? {})
+      });
+    };
+    const applyAuth = (init = {}, tokenProvider) => {
+      const headers = ensureHeaders(init.headers);
+      const token = tokenProvider();
+      if (token) {
+        headers.set("Authorization", `Bearer ${token}`);
+      }
+      return { ...init, headers };
+    };
+    const fallback = {
+      request: baseRequest,
+      getJson: async (input, init = {}) => {
+        const response = await baseRequest(input, init);
+        return response.json();
+      },
+      postJson: basePostJson,
+      withAuth(tokenOrProvider) {
+        const provider = typeof tokenOrProvider === "function" ? tokenOrProvider : () => tokenOrProvider;
+        return {
+          request(input, init = {}) {
+            return baseRequest(input, applyAuth(init, provider));
+          },
+          getJson(input, init = {}) {
+            return fallback.getJson(input, applyAuth(init, provider));
+          },
+          postJson(input, body, init = {}) {
+            return basePostJson(input, body, applyAuth(init, provider));
+          }
+        };
+      }
+    };
+    return fallback;
+  })();
+
+  if (!window.ApiClient) {
+    window.ApiClient = ApiClient;
+  }
+
   const monthNames = [
     "Январь",
     "Февраль",
@@ -104,11 +280,21 @@
   ];
 
   const App = {
-    storageKey,
+    storageKey: PROFILE_STORAGE_KEY,
     allowedRoutes,
+    profileStore: AppStores.ProfileStore,
+    authStore: AppStores.AuthStore,
+    apiClient: ApiClient,
+    authorizedApiClient: null,
+    routeAccessByRole: ROUTE_ACCESS_BY_ROLE,
+    publicRoutes: PUBLIC_ROUTES,
+    defaultRouteByRole: DEFAULT_ROUTE_BY_ROLE,
+    defaultAuthState: DEFAULT_AUTH_STATE,
     state: {
       profile: null,
-      currentRoute: "#/dashboard",
+      auth: { ...DEFAULT_AUTH_STATE },
+      currentRole: DEFAULT_AUTH_STATE.role,
+      currentRoute: INITIAL_ROUTE,
       currentStep: 0,
       modalOpen: false,
       lastFocused: null,
@@ -133,21 +319,37 @@
       marketplaceSelections: {},
       websiteFormOpen: null,
       websiteFormDraft: null,
-      websiteFontsLoaded: new Set()
+      websiteFontsLoaded: new Set(),
+      routeStatus: "ok"
     },
     init() {
       this.cacheDom();
       this.bindGlobalEvents();
+      this.authorizedApiClient =
+        typeof this.apiClient.withAuth === "function" && this.authStore
+          ? this.apiClient.withAuth(() => this.authStore.getToken())
+          : this.apiClient;
+      this.refreshAuthState();
       this.state.profile = this.loadProfile();
       this.syncMarketplaceFavoritesFromProfile(this.state.profile);
-      const defaultRoute = "#/dashboard";
-      if (location.hash === "#/welcome") {
-        location.replace(defaultRoute);
-      } else if (!location.hash || !this.allowedRoutes.includes(location.hash)) {
-        location.replace(defaultRoute);
-      } else {
-        this.handleRouteChange();
+      const initialHash = location.hash;
+      const roleDefaultRoute = this.getDefaultRouteForRole(this.state.currentRole);
+      if (initialHash === "#/welcome") {
+        location.replace(roleDefaultRoute);
+        return;
       }
+      if (!initialHash) {
+        location.replace(roleDefaultRoute);
+        return;
+      }
+      if (!this.allowedRoutes.includes(initialHash)) {
+        const fallback = this.publicRoutes.has(roleDefaultRoute)
+          ? roleDefaultRoute
+          : this.getPublicFallbackRoute();
+        location.replace(fallback);
+        return;
+      }
+      this.handleRouteChange();
     },
     cacheDom() {
       this.appEl = document.getElementById("app");
@@ -185,18 +387,110 @@
       };
       window.addEventListener("resize", this.handleBudgetResize);
     },
+    normalizeRole(role) {
+      if (role && this.routeAccessByRole[role]) {
+        return role;
+      }
+      return this.defaultAuthState.role;
+    },
+    getRoutesForRole(role) {
+      const normalized = this.normalizeRole(role);
+      return this.routeAccessByRole[normalized] || this.routeAccessByRole[this.defaultAuthState.role];
+    },
+    getDefaultRouteForRole(role) {
+      const normalized = this.normalizeRole(role);
+      return (
+        this.defaultRouteByRole[normalized] ||
+        this.defaultRouteByRole[this.defaultAuthState.role] ||
+        INITIAL_ROUTE
+      );
+    },
+    getPublicFallbackRoute() {
+      const preferred = this.defaultRouteByRole[this.defaultAuthState.role];
+      if (preferred && this.publicRoutes.has(preferred)) {
+        return preferred;
+      }
+      const [firstPublic] = Array.from(this.publicRoutes);
+      return firstPublic || INITIAL_ROUTE;
+    },
+    refreshAuthState() {
+      if (!this.authStore) {
+        this.state.auth = { ...this.defaultAuthState };
+        this.state.currentRole = this.defaultAuthState.role;
+        return this.state.auth;
+      }
+      let nextState;
+      try {
+        nextState =
+          typeof this.authStore.getState === "function"
+            ? this.authStore.getState()
+            : { ...this.defaultAuthState };
+      } catch (error) {
+        console.error("Не удалось получить состояние авторизации", error);
+        nextState = { ...this.defaultAuthState };
+      }
+      const roleCandidate =
+        typeof this.authStore.getRole === "function"
+          ? this.authStore.getRole()
+          : nextState.role;
+      this.state.auth = nextState;
+      this.state.currentRole = this.normalizeRole(roleCandidate);
+      return nextState;
+    },
+    getApiClient(requireAuth = false) {
+      if (!requireAuth) {
+        return this.apiClient;
+      }
+      if (this.authorizedApiClient) {
+        return this.authorizedApiClient;
+      }
+      if (typeof this.apiClient.withAuth === "function" && this.authStore) {
+        this.authorizedApiClient = this.apiClient.withAuth(() => this.authStore.getToken());
+        return this.authorizedApiClient;
+      }
+      return this.apiClient;
+    },
     handleRouteChange() {
-      const hash = location.hash || "#/dashboard";
+      const hash = location.hash || this.getDefaultRouteForRole(this.state.currentRole);
+      const authState = this.refreshAuthState();
       this.state.profile = this.loadProfile();
       this.syncMarketplaceFavoritesFromProfile(this.state.profile);
+      const role = this.state.currentRole;
+      const defaultRoute = this.getDefaultRouteForRole(role);
       if (hash === "#/welcome") {
-        location.replace("#/dashboard");
+        location.replace(defaultRoute);
         return;
       }
       if (!this.allowedRoutes.includes(hash)) {
-        location.replace("#/dashboard");
+        location.replace(defaultRoute);
         return;
       }
+      const isAuthenticated =
+        this.authStore && typeof this.authStore.isAuthenticated === "function"
+          ? this.authStore.isAuthenticated()
+          : Boolean(authState && authState.isAuthenticated);
+      if (!isAuthenticated && !this.publicRoutes.has(hash)) {
+        const fallback = this.getPublicFallbackRoute();
+        if (hash !== fallback) {
+          location.replace(fallback);
+          return;
+        }
+        this.state.routeStatus = "ok";
+        this.state.currentRoute = fallback;
+        if (fallback !== "#/quiz") {
+          this.state.currentStep = 0;
+        }
+        this.render();
+        return;
+      }
+      const routesForRole = this.getRoutesForRole(role);
+      if (!routesForRole.has(hash)) {
+        this.state.routeStatus = "forbidden";
+        this.state.currentRoute = hash;
+        this.render();
+        return;
+      }
+      this.state.routeStatus = "ok";
       this.state.currentRoute = hash;
       if (hash !== "#/quiz") {
         this.state.currentStep = 0;
@@ -204,6 +498,13 @@
       this.render();
     },
     render() {
+      if (!this.appEl) {
+        return;
+      }
+      if (this.state.routeStatus === "forbidden") {
+        this.renderRestrictedRoute();
+        return;
+      }
       switch (this.state.currentRoute) {
         case "#/quiz":
           this.renderQuiz();
@@ -217,6 +518,19 @@
         default:
           this.renderDashboard();
       }
+    },
+    renderRestrictedRoute() {
+      const fallback = this.getPublicFallbackRoute();
+      const safeFallback = typeof this.escapeHtml === "function" ? this.escapeHtml(fallback) : fallback;
+      this.appEl.innerHTML = `
+        <section class="card card--restricted">
+          <h1>Доступ ограничен</h1>
+          <p>У вас нет прав для просмотра этого раздела. Вернитесь к доступным страницам или обратитесь к администратору.</p>
+          <div class="actions">
+            <a class="secondary" href="${safeFallback}">Вернуться на доступный экран</a>
+          </div>
+        </section>
+      `;
     },
     quizSteps: [],
     ensureQuizSteps() {
@@ -1333,12 +1647,9 @@
         currentInvitation.updatedAt = now;
         const payload = this.buildPublicInvitationPayload(currentInvitation, resolvedTheme);
         const requestedSlug = this.buildBaseSlug(currentInvitation);
-        const response = await fetch("/api/invitations", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ ...payload, slug: requestedSlug })
+        const response = await this.getApiClient(true).postJson("/api/invitations", {
+          ...payload,
+          slug: requestedSlug
         });
         let result = null;
         try {
@@ -2853,14 +3164,12 @@
     },
     loadProfile() {
       try {
-        const raw = localStorage.getItem(this.storageKey);
-        if (!raw) return null;
-        const profile = JSON.parse(raw);
-        if (!profile || typeof profile !== "object") {
+        const storedProfile = this.profileStore ? this.profileStore.load() : null;
+        if (!storedProfile || typeof storedProfile !== "object") {
           return null;
         }
-        if (profile.schemaVersion !== PROFILE_SCHEMA_VERSION) {
-          const { profile: upgradedProfile, updated } = this.upgradeProfile(profile);
+        if (storedProfile.schemaVersion !== PROFILE_SCHEMA_VERSION) {
+          const { profile: upgradedProfile, updated } = this.upgradeProfile(storedProfile);
           if (!upgradedProfile) {
             return null;
           }
@@ -2871,8 +3180,8 @@
           }
           return upgradedProfile;
         }
-        const normalizedChecklist = this.normalizeChecklistData(profile);
-        let nextProfile = { ...profile };
+        const normalizedChecklist = this.normalizeChecklistData(storedProfile);
+        let nextProfile = { ...storedProfile };
         let needsSave = false;
         if (normalizedChecklist.updated) {
           nextProfile.checklist = normalizedChecklist.checklist;
@@ -2902,25 +3211,34 @@
     },
     saveProfile(profile) {
       try {
-        localStorage.setItem(this.storageKey, JSON.stringify(profile));
-        this.state.profile = profile;
-        this.syncMarketplaceFavoritesFromProfile(profile);
+        const savedProfile = this.profileStore.save(profile);
+        this.state.profile = savedProfile;
+        this.syncMarketplaceFavoritesFromProfile(savedProfile);
       } catch (error) {
         console.error("Не удалось сохранить профиль", error);
       }
     },
     updateProfile(patch) {
-      const current = this.state.profile || {};
-      const next = {
-        ...current,
+      const updater = (currentProfile = {}) => ({
+        ...currentProfile,
         ...patch,
         updatedAt: Date.now(),
         schemaVersion: PROFILE_SCHEMA_VERSION
-      };
-      this.saveProfile(next);
+      });
+      try {
+        const nextProfile = this.profileStore.update(updater);
+        this.state.profile = nextProfile;
+        this.syncMarketplaceFavoritesFromProfile(nextProfile);
+      } catch (error) {
+        console.error("Не удалось обновить профиль", error);
+      }
     },
     clearProfile() {
-      localStorage.removeItem(this.storageKey);
+      try {
+        this.profileStore.clear();
+      } catch (error) {
+        console.error("Не удалось очистить профиль", error);
+      }
       this.state.profile = null;
       this.state.marketplaceFavorites = new Set();
       this.state.marketplaceSelections = {};
