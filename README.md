@@ -4,7 +4,16 @@
 
 ## Запуск проекта
 
-1. Скопируйте `.env.example` в `.env` и обновите переменные окружения. Значения по умолчанию подходят для локальной разработки: сервер слушает `0.0.0.0:3000`, локаль интерфейса — `ru-RU`, HTTP-логи выводятся в формате `dev`, а Prisma пишет предупреждения и ошибки. Заполните `DATABASE_URL` и `JWT_SECRET` перед запуском сервера.
+1. Скопируйте `.env.example` в `.env` и обновите переменные окружения. Значения по умолчанию подходят для локальной разработки: сервер слушает `0.0.0.0:3000`, локаль интерфейса — `ru-RU`, HTTP-логи выводятся в формате `dev`, а Prisma пишет предупреждения и ошибки. Перед запуском сервера обязательно задайте секреты авторизации и подключение к базе:
+
+   ```env
+   DATABASE_URL=postgresql://wedding:wedding@localhost:5432/wedding
+   JWT_SECRET=change-me-super-secret
+   JWT_ACCESS_TTL=15m
+   JWT_REFRESH_TTL=30d
+   ```
+
+   TTL можно указывать числом секунд или короткими суффиксами (`s`, `m`, `h`, `d`, `w`). В среде разработки допускается не задавать переменные, установив `ALLOW_INCOMPLETE_SECRETS=1`, но для реального запуска они обязательны.
 2. Установите зависимости:
    ```bash
    npm install
@@ -63,6 +72,35 @@ npm run prisma:migrate
 ```bash
 npm run prisma:generate
 ```
+
+## Проверка API авторизации
+
+1. Зарегистрируйте пользователя по номеру телефона и одноразовому паролю, сохранив refresh-токен в cookie:
+
+   ```bash
+   curl -i -c cookies.txt \
+     -H "Content-Type: application/json" \
+     -X POST http://localhost:3000/api/auth/register \
+     -d '{"phone":"+79991234567","password":"123456","email":"demo@example.com"}'
+   ```
+
+2. Выполните вход с тем же номером и паролем. Ответ вернёт `accessToken`, а cookie `refreshToken` обновится в файле `cookies.txt`:
+
+   ```bash
+   curl -i -b cookies.txt -c cookies.txt \
+     -H "Content-Type: application/json" \
+     -X POST http://localhost:3000/api/auth/login \
+     -d '{"phone":"+79991234567","password":"123456"}'
+   ```
+
+3. Скопируйте `accessToken` из ответа и запросите защищённый профиль (refresh-токен при этом автоматически отправится из cookie):
+
+   ```bash
+   curl -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     http://localhost:3000/api/profile
+   ```
+
+Если фронтенд ещё не переключён на новую схему авторизации, браузер продолжит работать по прежнему локальному сценарию (данные профиля и состояния хранятся в `localStorage`). Новое API доступно параллельно и будет использоваться в дальнейшем, когда клиентскую часть адаптируют.
 
 ### Подключение через DataGrip
 

@@ -94,12 +94,15 @@
         localStorage.removeItem(this.key);
         return { ...DEFAULT_AUTH_STATE };
       },
-      setToken(token, extra = {}) {
+      setAccessToken(token, extra = {}) {
         return this.save({
           ...extra,
           token: token ?? null,
           isAuthenticated: Boolean(token) || Boolean(extra.isAuthenticated)
         });
+      },
+      setToken(token, extra = {}) {
+        return this.setAccessToken(token, extra);
       },
       isAuthenticated() {
         const state = this.getState();
@@ -109,9 +112,12 @@
         const state = this.getState();
         return state.role || DEFAULT_AUTH_STATE.role;
       },
-      getToken() {
+      getAccessToken() {
         const state = this.getState();
         return state.token || null;
+      },
+      getToken() {
+        return this.getAccessToken();
       }
     };
 
@@ -148,6 +154,29 @@
       }
       return { ...init, headers };
     };
+    const parseJsonSafe = async (response) => {
+      try {
+        return await response.json();
+      } catch (error) {
+        return null;
+      }
+    };
+    const handleAuthResponse = async (response) => {
+      const data = await parseJsonSafe(response.clone());
+      if (response.ok && data && data.accessToken) {
+        const role = (data.user && data.user.role) || DEFAULT_AUTH_STATE.role;
+        AppStores.AuthStore.setAccessToken(data.accessToken, {
+          user: data.user || null,
+          role,
+          isAuthenticated: true
+        });
+      }
+      return {
+        ok: response.ok,
+        status: response.status,
+        data
+      };
+    };
     const fallback = {
       request: baseRequest,
       getJson: async (input, init = {}) => {
@@ -155,6 +184,24 @@
         return response.json();
       },
       postJson: basePostJson,
+      async loginWithPhone(phone, password) {
+        const response = await basePostJson(
+          "/api/auth/login",
+          { phone, password },
+          { credentials: "include" }
+        );
+        return handleAuthResponse(response);
+      },
+      async registerWithPhone(phone, password, extra = {}) {
+        const payload = { phone, password };
+        if (extra && typeof extra === "object" && extra.email) {
+          payload.email = extra.email;
+        }
+        const response = await basePostJson("/api/auth/register", payload, {
+          credentials: "include"
+        });
+        return handleAuthResponse(response);
+      },
       withAuth(tokenOrProvider) {
         const provider = typeof tokenOrProvider === "function" ? tokenOrProvider : () => tokenOrProvider;
         return {
