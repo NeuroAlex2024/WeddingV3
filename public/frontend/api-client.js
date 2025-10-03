@@ -31,6 +31,20 @@
     return request(input, nextInit);
   };
 
+  const putJson = (input, body, init = {}) => {
+    const headers = createHeaders(init.headers);
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    const nextInit = {
+      ...init,
+      method: init.method || "PUT",
+      headers,
+      body: JSON.stringify(body ?? {})
+    };
+    return request(input, nextInit);
+  };
+
   const applyAuth = (init = {}, tokenProvider) => {
     const headers = createHeaders(init.headers);
     const token = tokenProvider();
@@ -43,10 +57,49 @@
     };
   };
 
+  const parseJsonResponse = async (response) => {
+    try {
+      const text = await response.text();
+      if (!text) {
+        return null;
+      }
+      return JSON.parse(text);
+    } catch (error) {
+      return null;
+    }
+  };
+
   const ApiClient = {
     request,
     getJson,
     postJson,
+    putJson,
+    async fetchProfile(init = {}) {
+      const stores = window.AppStores;
+      const tokenProvider = stores && stores.AuthStore && typeof stores.AuthStore.getToken === "function"
+        ? () => stores.AuthStore.getToken()
+        : () => null;
+      const response = await request("/api/profile", applyAuth(init, tokenProvider));
+      const data = await parseJsonResponse(response);
+      return {
+        ok: response.ok,
+        status: response.status,
+        data
+      };
+    },
+    async updateProfile(body = {}, init = {}) {
+      const stores = window.AppStores;
+      const tokenProvider = stores && stores.AuthStore && typeof stores.AuthStore.getToken === "function"
+        ? () => stores.AuthStore.getToken()
+        : () => null;
+      const response = await putJson("/api/profile", body, applyAuth(init, tokenProvider));
+      const data = await parseJsonResponse(response);
+      return {
+        ok: response.ok,
+        status: response.status,
+        data
+      };
+    },
     withAuth(tokenOrProvider) {
       const provider = typeof tokenOrProvider === "function" ? tokenOrProvider : () => tokenOrProvider;
       return {
@@ -58,6 +111,27 @@
         },
         postJson(input, body, init = {}) {
           return postJson(input, body, applyAuth(init, provider));
+        },
+        putJson(input, body, init = {}) {
+          return putJson(input, body, applyAuth(init, provider));
+        },
+        async fetchProfile(init = {}) {
+          const response = await request("/api/profile", applyAuth(init, provider));
+          const data = await parseJsonResponse(response);
+          return {
+            ok: response.ok,
+            status: response.status,
+            data
+          };
+        },
+        async updateProfile(body = {}, init = {}) {
+          const response = await putJson("/api/profile", body, applyAuth(init, provider));
+          const data = await parseJsonResponse(response);
+          return {
+            ok: response.ok,
+            status: response.status,
+            data
+          };
         }
       };
     }

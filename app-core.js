@@ -10,12 +10,16 @@
 
   const ROUTE_ACCESS_BY_ROLE = {
     guest: new Set(["#/dashboard", "#/quiz", "#/website"]),
+    wedding: new Set(["#/dashboard", "#/quiz", "#/website"]),
+    contractor: new Set(["#/dashboard", "#/quiz", "#/website"]),
     planner: new Set(["#/quiz", "#/dashboard", "#/website"]),
     admin: new Set(["#/quiz", "#/dashboard", "#/website"])
   };
   const PUBLIC_ROUTES = new Set(["#/dashboard", "#/quiz", "#/website"]);
   const DEFAULT_ROUTE_BY_ROLE = {
     guest: "#/dashboard",
+    wedding: "#/dashboard",
+    contractor: "#/dashboard",
     planner: "#/dashboard",
     admin: "#/dashboard"
   };
@@ -601,6 +605,26 @@
           baseProfile.eventDate = weddingProfileCandidate.eventDate ?? null;
         }
       }
+      const applyDashboardCollections = (source, role) => {
+        if (!source || typeof source !== "object") {
+          return;
+        }
+        const timelineNormalization = this.normalizeTimelineData(source.timeline, role);
+        baseProfile.timeline = timelineNormalization.timeline.map((item) => ({ ...item }));
+        const checklistNormalization = this.normalizeChecklistData({
+          checklist: this.coerceArray(source.checklist),
+          checklistFolders: this.coerceArray(source.checklistFolders)
+        });
+        baseProfile.checklist = checklistNormalization.checklist.map((item) => ({ ...item }));
+        baseProfile.checklistFolders = checklistNormalization.checklistFolders.map((folder) => ({ ...folder }));
+        const budgetNormalization = this.normalizeBudgetEntries(source.budgetEntries);
+        baseProfile.budgetEntries = budgetNormalization.entries.map((entry) => ({ ...entry }));
+      };
+      const primarySource =
+        normalizedRole === "contractor"
+          ? contractorProfileCandidate || weddingProfileCandidate
+          : weddingProfileCandidate || contractorProfileCandidate;
+      applyDashboardCollections(primarySource, normalizedRole);
       baseProfile.schemaVersion = PROFILE_SCHEMA_VERSION;
       baseProfile.updatedAt = Date.now();
       return baseProfile;
@@ -635,6 +659,143 @@
         month: "long",
         year: "numeric"
       });
+    },
+    coerceArray(value) {
+      if (Array.isArray(value)) {
+        return value;
+      }
+      if (typeof value === "string") {
+        try {
+          const parsed = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return parsed;
+          }
+        } catch (error) {
+          console.warn("Не удалось разобрать JSON коллекцию", error);
+        }
+      }
+      return [];
+    },
+    getDefaultTimelineForRole(role) {
+      const normalizedRole = this.normalizeRole(role);
+      const source =
+        normalizedRole === "contractor"
+          ? Array.isArray(DEFAULT_CONTRACTOR_TIMELINE)
+            ? DEFAULT_CONTRACTOR_TIMELINE
+            : []
+          : Array.isArray(DEFAULT_WEDDING_TIMELINE)
+          ? DEFAULT_WEDDING_TIMELINE
+          : [];
+      return source.map((item) => ({ ...item, done: Boolean(item.done) }));
+    },
+    normalizeTimelineData(entries, role) {
+      const timelineArray = this.coerceArray(entries);
+      if (!timelineArray.length) {
+        return {
+          updated: true,
+          timeline: this.getDefaultTimelineForRole(role)
+        };
+      }
+      let updated = false;
+      const sanitized = timelineArray
+        .filter((item) => item && typeof item === "object")
+        .map((item, index) => {
+          const id =
+            typeof item.id === "string" && item.id.trim().length
+              ? item.id.trim()
+              : `timeline-${Date.now()}-${index}`;
+          const title =
+            typeof item.title === "string" && item.title.trim().length
+              ? item.title.trim()
+              : "Этап подготовки";
+          const description =
+            typeof item.description === "string" ? item.description.trim() : "";
+          const dueLabel =
+            typeof item.dueLabel === "string" && item.dueLabel.trim().length
+              ? item.dueLabel.trim()
+              : "";
+          const status =
+            typeof item.status === "string" && item.status.trim().length
+              ? item.status.trim()
+              : "upcoming";
+          const done = Boolean(item.done);
+          const orderValue = Number(item.order);
+          const order = Number.isFinite(orderValue) ? orderValue : index + 1;
+          if (
+            id !== item.id ||
+            title !== item.title ||
+            description !== (item.description || "") ||
+            dueLabel !== (item.dueLabel || "") ||
+            status !== (item.status || "upcoming") ||
+            done !== Boolean(item.done) ||
+            order !== (item.order ?? index + 1)
+          ) {
+            updated = true;
+          }
+          return { id, title, description, dueLabel, status, done, order };
+        });
+      sanitized.sort((a, b) => a.order - b.order);
+      return {
+        updated,
+        timeline: sanitized
+      };
+    },
+    normalizeBudgetEntries(entries) {
+      const budgetArray = this.coerceArray(entries);
+      if (!budgetArray.length) {
+        return {
+          updated: false,
+          entries: []
+        };
+      }
+      let updated = false;
+      const sanitized = budgetArray
+        .filter((item) => item && typeof item === "object")
+        .map((item, index) => {
+          const id =
+            typeof item.id === "string" && item.id.trim().length
+              ? item.id.trim()
+              : `budget-${Date.now()}-${index}`;
+          const title =
+            typeof item.title === "string" && item.title.trim().length
+              ? item.title.trim()
+              : `Статья ${index + 1}`;
+          const amountValue = Number(item.amount);
+          const amount = Number.isFinite(amountValue) ? Math.max(0, Math.round(amountValue)) : 0;
+          if (id !== item.id || title !== item.title || amount !== Number(item.amount ?? 0)) {
+            updated = true;
+          }
+          return { id, title, amount };
+        });
+      return {
+        updated,
+        entries: sanitized
+      };
+    },
+    getTimelineItems(profile, role) {
+      const targetRole = role || profile?.role || this.state.currentRole;
+      const normalizedRole = this.normalizeRole(targetRole);
+      const source = profile && typeof profile === "object" ? profile.timeline : null;
+      const normalized = this.normalizeTimelineData(source, normalizedRole);
+      return normalized.timeline;
+    },
+    updateTimelineProgress(timelineItems = null) {
+      const items = Array.isArray(timelineItems)
+        ? timelineItems
+        : Array.isArray(this.state.profile?.timeline)
+        ? this.state.profile.timeline
+        : [];
+      const total = items.length;
+      const completed = items.filter((item) => item && item.done).length;
+      const percent = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+      const counterEl = this.appEl.querySelector('[data-timeline-progress-count]');
+      if (counterEl) {
+        counterEl.textContent = `${completed} / ${total}`;
+      }
+      const fillEl = this.appEl.querySelector('[data-timeline-progress-fill]');
+      if (fillEl) {
+        fillEl.style.width = `${percent}%`;
+      }
     },
     refreshAuthState() {
       if (!this.authStore) {
@@ -1165,6 +1326,9 @@
         quizCompleted: false,
         createdAt: now,
         updatedAt: now,
+        timeline: this.getDefaultTimelineForRole(this.state.currentRole || this.defaultAuthState.role).map((item) => ({
+          ...item
+        })),
         checklist: DEFAULT_CHECKLIST_ITEMS.map((item) => ({ ...item })),
         checklistFolders: DEFAULT_CHECKLIST_FOLDERS.map((item) => ({ ...item })),
         budgetEntries: DEFAULT_BUDGET_ENTRIES.map((item) => ({ ...item })),
@@ -1194,6 +1358,16 @@
       if (!profile) return;
       let updated = false;
       const timestamp = Date.now();
+      const timelineNormalization = this.normalizeTimelineData(
+        profile.timeline,
+        profile.role || this.state.currentRole
+      );
+      if (!Array.isArray(profile.timeline) || timelineNormalization.updated) {
+        profile.timeline = timelineNormalization.timeline.map((item) => ({ ...item }));
+        updated = true;
+      } else {
+        profile.timeline = timelineNormalization.timeline.map((item) => ({ ...item }));
+      }
       if (!Array.isArray(profile.checklist) || profile.checklist.length === 0) {
         profile.checklist = DEFAULT_CHECKLIST_ITEMS.map((item) => ({ ...item }));
         updated = true;
@@ -1202,12 +1376,12 @@
         profile.checklistFolders = DEFAULT_CHECKLIST_FOLDERS.map((item) => ({ ...item }));
         updated = true;
       }
-      const normalized = this.normalizeChecklistData(profile);
-      if (normalized.updated) {
-        profile.checklist = normalized.checklist;
-        profile.checklistFolders = normalized.checklistFolders;
+      const normalizedChecklist = this.normalizeChecklistData(profile);
+      if (normalizedChecklist.updated) {
         updated = true;
       }
+      profile.checklist = normalizedChecklist.checklist;
+      profile.checklistFolders = normalizedChecklist.checklistFolders;
       const websiteNormalization = this.normalizeWebsiteInvitation(profile.websiteInvitation, timestamp);
       if (!profile.websiteInvitation || websiteNormalization.updated) {
         profile.websiteInvitation = websiteNormalization.invitation;
@@ -1218,30 +1392,17 @@
       if (!Array.isArray(profile.budgetEntries) || profile.budgetEntries.length === 0) {
         profile.budgetEntries = DEFAULT_BUDGET_ENTRIES.map((item) => ({ ...item }));
         updated = true;
-      } else if (Array.isArray(profile.budgetEntries)) {
-        const sanitizedBudget = profile.budgetEntries
-          .filter((entry) => entry && typeof entry === "object")
-          .map((entry, index) => {
-            const amountValue = Number(entry.amount);
-            const amount = Number.isFinite(amountValue) ? Math.max(0, Math.round(amountValue)) : 0;
-            const id = typeof entry.id === "string" && entry.id.trim().length
-              ? entry.id
-              : `budget-${timestamp}-${index}`;
-            const title = typeof entry.title === "string" ? entry.title : String(entry.title || "");
-            if (entry.amount !== amount || entry.id !== id || entry.title !== title) {
-              updated = true;
-            }
-            return {
-              ...entry,
-              id,
-              amount,
-              title
-            };
-          });
-        if (sanitizedBudget.length !== profile.budgetEntries.length) {
+      } else {
+        const budgetNormalization = this.normalizeBudgetEntries(profile.budgetEntries);
+        if (budgetNormalization.entries.length === 0) {
+          profile.budgetEntries = DEFAULT_BUDGET_ENTRIES.map((item) => ({ ...item }));
           updated = true;
+        } else {
+          profile.budgetEntries = budgetNormalization.entries.map((entry) => ({ ...entry }));
+          if (budgetNormalization.updated) {
+            updated = true;
+          }
         }
-        profile.budgetEntries = sanitizedBudget;
       }
       if (!Array.isArray(profile.marketplaceFavorites)) {
         profile.marketplaceFavorites = [];
@@ -2171,6 +2332,14 @@
           this.toggleChecklistItem(taskId, target.checked);
         });
       });
+      this.appEl.querySelectorAll('[data-action="toggle-timeline"]').forEach((input) => {
+        input.addEventListener("change", (event) => {
+          const target = event.currentTarget;
+          const timelineId = target.dataset.timelineId;
+          if (!timelineId) return;
+          this.toggleTimelineItem(timelineId, target.checked);
+        });
+      });
       const checklistForm = document.getElementById("checklist-form");
       if (checklistForm) {
         checklistForm.addEventListener("submit", (event) => {
@@ -2732,7 +2901,7 @@
           : folder
       );
       this.resetChecklistFolderEditing();
-      this.updateProfile({ checklistFolders: next });
+      this.updateProfile({ checklistFolders: next }, { syncServer: true });
       this.renderDashboard();
     },
     deleteChecklistFolder(folderId) {
@@ -2770,7 +2939,7 @@
       if (tasksChanged) {
         patch.checklist = nextTasks;
       }
-      this.updateProfile(patch);
+      this.updateProfile(patch, { syncServer: true });
       this.renderDashboard();
     },
     updateChecklistItem(taskId, title) {
@@ -2797,7 +2966,7 @@
         };
       });
       this.resetChecklistEditing();
-      this.updateProfile({ checklist: next });
+      this.updateProfile({ checklist: next }, { syncServer: true });
       this.renderDashboard();
     },
     deleteChecklistItem(taskId) {
@@ -2805,8 +2974,30 @@
       const current = Array.isArray(this.state.profile?.checklist) ? this.state.profile.checklist : [];
       const next = current.filter((item, index) => this.getChecklistItemKey(item, index) !== taskId);
       this.resetChecklistEditing();
-      this.updateProfile({ checklist: next });
+      this.updateProfile({ checklist: next }, { syncServer: true });
       this.renderDashboard();
+    },
+    toggleTimelineItem(itemId, done) {
+      const id = typeof itemId === "string" ? itemId.trim() : "";
+      if (!id) {
+        return;
+      }
+      const profile = this.ensureProfile();
+      if (!profile) {
+        return;
+      }
+      const role = profile.role || this.state.currentRole;
+      const normalized = this.normalizeTimelineData(profile.timeline, role);
+      const nextTimeline = normalized.timeline.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              done: Boolean(done)
+            }
+          : item
+      );
+      this.updateProfile({ timeline: nextTimeline }, { syncServer: true });
+      this.updateTimelineProgress(nextTimeline);
     },
     toggleChecklistItem(taskId, done) {
       const current = Array.isArray(this.state.profile?.checklist) ? this.state.profile.checklist : [];
@@ -2827,7 +3018,7 @@
           id: key
         };
       });
-      this.updateProfile({ checklist: next });
+      this.updateProfile({ checklist: next }, { syncServer: true });
     },
     addChecklistItem(title) {
       const current = Array.isArray(this.state.profile?.checklist) ? this.state.profile.checklist : [];
@@ -2843,7 +3034,7 @@
         }
       ];
       this.resetChecklistEditing();
-      this.updateProfile({ checklist: next });
+      this.updateProfile({ checklist: next }, { syncServer: true });
       this.renderDashboard();
     },
     createChecklistFolder() {
@@ -2878,7 +3069,7 @@
         ...this.state.checklistFoldersCollapse,
         [folderId]: false
       };
-      this.updateProfile({ checklistFolders: nextFolders });
+      this.updateProfile({ checklistFolders: nextFolders }, { syncServer: true });
       this.renderDashboard();
     },
     toggleChecklistFolder(folderId) {
@@ -2924,7 +3115,7 @@
         this.state.checklistDragTaskId = null;
         return;
       }
-      this.updateProfile({ checklist: next });
+      this.updateProfile({ checklist: next }, { syncServer: true });
       this.state.checklistDragTaskId = null;
       this.renderDashboard();
     },
@@ -3025,7 +3216,7 @@
         }
       ];
       this.resetBudgetEditing();
-      this.updateProfile({ budgetEntries: next });
+      this.updateProfile({ budgetEntries: next }, { syncServer: true });
       this.renderDashboard();
     },
     startBudgetEdit(entryId) {
@@ -3054,7 +3245,7 @@
           : entry
       );
       this.resetBudgetEditing();
-      this.updateProfile({ budgetEntries: next });
+      this.updateProfile({ budgetEntries: next }, { syncServer: true });
       this.renderDashboard();
     },
     deleteBudgetEntry(entryId) {
@@ -3065,7 +3256,7 @@
         return;
       }
       this.resetBudgetEditing();
-      this.updateProfile({ budgetEntries: next });
+      this.updateProfile({ budgetEntries: next }, { syncServer: true });
       this.renderDashboard();
     },
     cancelBudgetEdit() {
@@ -3510,20 +3701,38 @@
         console.error("Не удалось сохранить профиль", error);
       }
     },
-    updateProfile(patch) {
+    updateProfile(patch, options = {}) {
+      if (!patch || typeof patch !== "object") {
+        return null;
+      }
+      const { syncServer = false, persistServer = true } = options;
       const updater = (currentProfile = {}) => ({
         ...currentProfile,
         ...patch,
         updatedAt: Date.now(),
         schemaVersion: PROFILE_SCHEMA_VERSION
       });
+      let nextProfile = null;
       try {
-        const nextProfile = this.profileStore.update(updater);
+        nextProfile = this.profileStore.update(updater);
         this.state.profile = nextProfile;
         this.syncMarketplaceFavoritesFromProfile(nextProfile);
       } catch (error) {
         console.error("Не удалось обновить профиль", error);
       }
+      if (syncServer) {
+        Promise.resolve()
+          .then(() => this.updateServerProfile(patch, { persist: persistServer }))
+          .then((response) => {
+            if (!response || !response.ok) {
+              console.warn("Не удалось синхронизировать профиль с сервером", response);
+            }
+          })
+          .catch((error) => {
+            console.warn("Ошибка синхронизации профиля с сервером", error);
+          });
+      }
+      return nextProfile;
     },
     clearProfile() {
       try {
@@ -3585,6 +3794,8 @@
   App.BUDGET_COLORS = BUDGET_COLORS;
   App.WEBSITE_THEMES = WEBSITE_THEMES;
   App.PROFILE_SCHEMA_VERSION = PROFILE_SCHEMA_VERSION;
+  App.DEFAULT_WEDDING_TIMELINE = DEFAULT_WEDDING_TIMELINE;
+  App.DEFAULT_CONTRACTOR_TIMELINE = DEFAULT_CONTRACTOR_TIMELINE;
 
   window.AppCore = App;
   

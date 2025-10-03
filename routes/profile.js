@@ -2,10 +2,236 @@ const express = require('express');
 
 const { getPrismaClient } = require('../src/db/client');
 const config = require('../src/server/config');
+const {
+  DEFAULT_CHECKLIST_ITEMS,
+  DEFAULT_CHECKLIST_FOLDERS,
+  DEFAULT_BUDGET_ENTRIES,
+  DEFAULT_WEDDING_TIMELINE,
+  DEFAULT_CONTRACTOR_TIMELINE
+} = require('../src/server/profile-defaults');
 
 const router = express.Router();
 
 const prisma = config.databaseUrl ? getPrismaClient() : null;
+
+class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ValidationError";
+  }
+}
+
+const clone = (value) => JSON.parse(JSON.stringify(value));
+
+const coerceArray = (value) => {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      return [];
+    }
+  }
+  return [];
+};
+
+const sanitizeTimelineInput = (value, role, { fallbackOnEmpty = false } = {}) => {
+  const rawArray = coerceArray(value);
+  const sourceDefaults = role === 'contractor' ? DEFAULT_CONTRACTOR_TIMELINE : DEFAULT_WEDDING_TIMELINE;
+  if (!rawArray.length) {
+    return fallbackOnEmpty ? clone(sourceDefaults) : [];
+  }
+  let changed = false;
+  const sanitized = rawArray
+    .filter((item) => item && typeof item === 'object')
+    .map((item, index) => {
+      const id = typeof item.id === 'string' && item.id.trim().length ? item.id.trim() : `timeline-${Date.now()}-${index}`;
+      const title = typeof item.title === 'string' && item.title.trim().length ? item.title.trim() : `Этап ${index + 1}`;
+      const description = typeof item.description === 'string' ? item.description.trim() : '';
+      const dueLabel = typeof item.dueLabel === 'string' ? item.dueLabel.trim() : '';
+      const status = typeof item.status === 'string' && item.status.trim().length ? item.status.trim() : 'upcoming';
+      const done = Boolean(item.done);
+      const orderValue = Number(item.order);
+      const order = Number.isFinite(orderValue) ? orderValue : index + 1;
+      if (
+        id !== item.id ||
+        title !== (item.title || '') ||
+        description !== (item.description || '') ||
+        dueLabel !== (item.dueLabel || '') ||
+        status !== (item.status || 'upcoming') ||
+        done !== Boolean(item.done) ||
+        order !== (item.order ?? index + 1)
+      ) {
+        changed = true;
+      }
+      return { id, title, description, dueLabel, status, done, order };
+    });
+  if (!sanitized.length && fallbackOnEmpty) {
+    return clone(sourceDefaults);
+  }
+  if (changed) {
+    sanitized.sort((a, b) => a.order - b.order);
+  }
+  return sanitized;
+};
+
+const sanitizeChecklistItems = (value) => {
+  const rawArray = coerceArray(value);
+  let changed = false;
+  const sanitized = rawArray
+    .filter((item) => item && typeof item === 'object')
+    .map((item, index) => {
+      const id = typeof item.id === 'string' && item.id.trim().length ? item.id.trim() : `task-${Date.now()}-${index}`;
+      const title = typeof item.title === 'string' && item.title.trim().length ? item.title.trim() : `Задача ${index + 1}`;
+      const done = Boolean(item.done);
+      const orderValue = Number(item.order);
+      const order = Number.isFinite(orderValue) ? orderValue : index + 1;
+      const folderId = typeof item.folderId === 'string' && item.folderId.trim().length ? item.folderId.trim() : null;
+      const type = typeof item.type === 'string' && item.type.trim().length ? item.type.trim() : 'task';
+      if (
+        id !== item.id ||
+        title !== (item.title || '') ||
+        done !== Boolean(item.done) ||
+        order !== (item.order ?? index + 1) ||
+        folderId !== (item.folderId ?? null) ||
+        type !== (item.type || 'task')
+      ) {
+        changed = true;
+      }
+      return { id, title, done, order, folderId, type };
+    });
+  return { items: sanitized, updated: changed };
+};
+
+const sanitizeChecklistFolders = (value) => {
+  const rawArray = coerceArray(value);
+  let changed = false;
+  const sanitized = rawArray
+    .filter((folder) => folder && typeof folder === 'object')
+    .map((folder, index) => {
+      const id = typeof folder.id === 'string' && folder.id.trim().length ? folder.id.trim() : `folder-${Date.now()}-${index}`;
+      const title = typeof folder.title === 'string' && folder.title.trim().length ? folder.title.trim() : `Папка ${index + 1}`;
+      const color = typeof folder.color === 'string' && folder.color.trim().length ? folder.color.trim() : '#F5D0D4';
+      const createdAtValue = Number(folder.createdAt);
+      const createdAt = Number.isFinite(createdAtValue) ? createdAtValue : Date.now() + index;
+      const orderValue = Number(folder.order);
+      const order = Number.isFinite(orderValue) ? orderValue : createdAt;
+      if (
+        id !== folder.id ||
+        title !== (folder.title || '') ||
+        color !== (folder.color || '#F5D0D4') ||
+        createdAt !== (folder.createdAt ?? createdAt) ||
+        order !== (folder.order ?? createdAt)
+      ) {
+        changed = true;
+      }
+      return { id, title, color, createdAt, order };
+    });
+  sanitized.sort((a, b) => a.order - b.order);
+  return { folders: sanitized, updated: changed };
+};
+
+const sanitizeBudgetEntries = (value) => {
+  const rawArray = coerceArray(value);
+  let changed = false;
+  const sanitized = rawArray
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry, index) => {
+      const id = typeof entry.id === 'string' && entry.id.trim().length ? entry.id.trim() : `budget-${Date.now()}-${index}`;
+      const title = typeof entry.title === 'string' && entry.title.trim().length ? entry.title.trim() : `Статья ${index + 1}`;
+      const amountValue = Number(entry.amount);
+      const amount = Number.isFinite(amountValue) ? Math.max(0, Math.round(amountValue)) : 0;
+      if (id !== entry.id || title !== (entry.title || '') || amount !== Number(entry.amount ?? 0)) {
+        changed = true;
+      }
+      return { id, title, amount };
+    });
+  return { entries: sanitized, updated: changed };
+};
+
+const cloneModuleArray = (value) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((item) => (item && typeof item === 'object' ? { ...item } : item));
+};
+
+const serializeModules = (modulesData) => {
+  const result = {};
+  if (modulesData.timeline !== undefined) {
+    result.timeline = cloneModuleArray(modulesData.timeline);
+  }
+  if (modulesData.checklist !== undefined) {
+    result.checklist = cloneModuleArray(modulesData.checklist);
+  }
+  if (modulesData.checklistFolders !== undefined) {
+    result.checklistFolders = cloneModuleArray(modulesData.checklistFolders);
+  }
+  if (modulesData.budgetEntries !== undefined) {
+    result.budgetEntries = cloneModuleArray(modulesData.budgetEntries);
+  }
+  return result;
+};
+
+const deserializeProfileModules = (profile, role) => {
+  if (!profile) {
+    return null;
+  }
+  const safeRole = role === 'contractor' ? 'contractor' : 'wedding';
+  const timeline = sanitizeTimelineInput(profile.timeline, safeRole, { fallbackOnEmpty: true });
+  const checklistSanitized = sanitizeChecklistItems(profile.checklist);
+  const foldersSanitized = sanitizeChecklistFolders(profile.checklistFolders);
+  const budgetSanitized = sanitizeBudgetEntries(profile.budgetEntries);
+  return {
+    ...profile,
+    timeline,
+    checklist: checklistSanitized.items.length ? checklistSanitized.items : clone(DEFAULT_CHECKLIST_ITEMS),
+    checklistFolders: foldersSanitized.folders,
+    budgetEntries: budgetSanitized.entries.length ? budgetSanitized.entries : clone(DEFAULT_BUDGET_ENTRIES)
+  };
+};
+
+const collectModulesFromBody = (body, role) => {
+  const modules = {};
+  const provided = {};
+  if (Object.prototype.hasOwnProperty.call(body, 'timeline')) {
+    modules.timeline = sanitizeTimelineInput(body.timeline, role);
+    provided.timeline = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'checklist')) {
+    const sanitizedChecklist = sanitizeChecklistItems(body.checklist);
+    modules.checklist = sanitizedChecklist.items;
+    provided.checklist = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'checklistFolders')) {
+    const sanitizedFolders = sanitizeChecklistFolders(body.checklistFolders);
+    modules.checklistFolders = sanitizedFolders.folders;
+    provided.checklistFolders = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'budgetEntries')) {
+    const sanitizedBudget = sanitizeBudgetEntries(body.budgetEntries);
+    modules.budgetEntries = sanitizedBudget.entries;
+    provided.budgetEntries = true;
+  }
+  return { data: modules, provided };
+};
+
+const applyDefaultsForCreate = (modulesData, provided, role) => {
+  const defaultsTimeline = role === 'contractor' ? DEFAULT_CONTRACTOR_TIMELINE : DEFAULT_WEDDING_TIMELINE;
+  return {
+    timeline: provided.timeline ? cloneModuleArray(modulesData.timeline) : clone(defaultsTimeline),
+    checklist: provided.checklist ? cloneModuleArray(modulesData.checklist) : clone(DEFAULT_CHECKLIST_ITEMS),
+    checklistFolders: provided.checklistFolders
+      ? cloneModuleArray(modulesData.checklistFolders)
+      : clone(DEFAULT_CHECKLIST_FOLDERS),
+    budgetEntries: provided.budgetEntries
+      ? cloneModuleArray(modulesData.budgetEntries)
+      : clone(DEFAULT_BUDGET_ENTRIES)
+  };
+};
 
 function ensurePrismaAvailable(res) {
   if (!prisma) {
@@ -33,8 +259,8 @@ function buildProfileResponse(user) {
   if (!user) {
     return null;
   }
-  const contractorProfile = user.contractorProfile ?? null;
-  const weddingProfile = user.weddingProfile ?? null;
+  const contractorProfile = deserializeProfileModules(user.contractorProfile ?? null, 'contractor');
+  const weddingProfile = deserializeProfileModules(user.weddingProfile ?? null, 'wedding');
   let activeProfile = null;
   if (user.role === 'contractor') {
     activeProfile = contractorProfile;
@@ -115,7 +341,10 @@ router.put('/', async (req, res) => {
       return res.status(404).json({ error: 'Пользователь не найден.' });
     }
 
-    if (user.role === 'contractor') {
+    const role = user.role === 'contractor' ? 'contractor' : 'wedding';
+    const { data: modulesData, provided: modulesProvided } = collectModulesFromBody(body, role);
+
+    if (role === 'contractor') {
       const updateData = {};
       if (Object.prototype.hasOwnProperty.call(body, 'companyName')) {
         if (typeof body.companyName !== 'string') {
@@ -135,13 +364,15 @@ router.put('/', async (req, res) => {
         }
       }
 
+      const serializedModules = serializeModules(modulesData);
       await prisma.contractorProfile.upsert({
         where: { userId },
-        update: updateData,
+        update: { ...updateData, ...serializedModules },
         create: {
           userId,
           companyName: updateData.companyName ?? '',
-          description: updateData.description ?? null
+          description: updateData.description ?? null,
+          ...serializeModules(applyDefaultsForCreate(modulesData, modulesProvided, role))
         }
       });
     } else {
@@ -176,14 +407,16 @@ router.put('/', async (req, res) => {
         }
       }
 
+      const serializedModules = serializeModules(modulesData);
       await prisma.weddingProfile.upsert({
         where: { userId },
-        update: updateData,
+        update: { ...updateData, ...serializedModules },
         create: {
           userId,
           coupleNames: updateData.coupleNames ?? '',
           location: updateData.location ?? null,
-          eventDate: updateData.eventDate ?? null
+          eventDate: updateData.eventDate ?? null,
+          ...serializeModules(applyDefaultsForCreate(modulesData, modulesProvided, role))
         }
       });
     }
@@ -195,6 +428,9 @@ router.put('/', async (req, res) => {
 
     return res.json(buildProfileResponse(refreshedUser));
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return res.status(400).json({ error: error.message });
+    }
     console.error('Не удалось обновить профиль пользователя', {
       error: error.message,
       stack: error.stack,
