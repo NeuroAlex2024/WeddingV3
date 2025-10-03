@@ -159,114 +159,31 @@
       `;
       }).join("");
       const isChecklistExpanded = Boolean(this.state.isChecklistExpanded);
-      const checklistOverlay = isChecklistExpanded
-        ? '<button type="button" class="checklist-overlay" data-action="collapse-checklist" aria-label="Свернуть чек лист"></button>'
-        : "";
-      const checklistContainerClasses = [
-        "dashboard-module",
-        "checklist",
-        isChecklistExpanded ? "checklist--expanded" : ""
-      ]
-        .filter(Boolean)
-        .join(" ");
       const modulesClasses = [
         "dashboard-modules",
         isChecklistExpanded ? "dashboard-modules--checklist-expanded" : ""
       ]
         .filter(Boolean)
         .join(" ");
-      const expandLabel = isChecklistExpanded ? "Свернуть чек лист" : "Развернуть чек лист";
-      const expandIcon = isChecklistExpanded ? "✕" : "⤢";
       const backgroundInertAttributes = isChecklistExpanded ? ' aria-hidden="true" tabindex="-1"' : "";
-      const checklistEditingId = this.state.checklistEditingId;
-      const checklistDraft = this.state.checklistEditingDraft || {};
-      const { tasks: checklistTasks, folders: checklistFolders } = this.getChecklistCollections(profile);
-      this.syncChecklistFolderCollapse(checklistFolders);
-      const checklistItems = this.renderChecklistItems(checklistTasks, checklistFolders);
-      const budgetEntries = Array.isArray(profile?.budgetEntries) ? profile.budgetEntries : [];
-      const decoratedBudgetEntries = budgetEntries.map((entry, index) => {
-        const amountValue = Number(entry.amount);
-        const amount = Number.isFinite(amountValue) ? Math.max(0, Math.round(amountValue)) : 0;
-        const color = BUDGET_COLORS[index % BUDGET_COLORS.length];
-        return {
-          ...entry,
-          color,
-          amount
-        };
-      });
-      const totalBudget = decoratedBudgetEntries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
-      const previousTotal = this.state.lastBudgetTotal || 0;
+      const modulesApi = window.AppDashboardModules || {};
+      const timelineModule = typeof modulesApi.renderTimeline === "function"
+        ? modulesApi.renderTimeline({ app: this, profile, role: normalizedRole, backgroundInertAttributes })
+        : { markup: "" };
+      const checklistModule = typeof modulesApi.renderChecklist === "function"
+        ? modulesApi.renderChecklist({ app: this, profile })
+        : { overlay: "", markup: "" };
+      const budgetModule = typeof modulesApi.renderBudget === "function"
+        ? modulesApi.renderBudget({ app: this, profile, backgroundInertAttributes })
+        : { markup: "", totalBudget: 0, previousTotal: this.state.lastBudgetTotal || 0 };
+      const checklistOverlay = checklistModule.overlay || "";
+      const checklistMarkup = checklistModule.markup || "";
+      const budgetMarkup = budgetModule.markup || "";
+      const totalBudget = Number.isFinite(budgetModule.totalBudget) ? budgetModule.totalBudget : 0;
+      const previousTotal = Number.isFinite(budgetModule.previousTotal)
+        ? budgetModule.previousTotal
+        : this.state.lastBudgetTotal || 0;
       this.state.lastBudgetTotal = totalBudget;
-      const positiveEntries = decoratedBudgetEntries.filter((entry) => Number(entry.amount) > 0);
-      let startAngle = 0;
-      const segments = positiveEntries.map((entry, index) => {
-        const fraction = totalBudget > 0 ? Number(entry.amount) / totalBudget : 0;
-        const endAngle = index === positiveEntries.length - 1 ? 360 : startAngle + fraction * 360;
-        const segment = `${entry.color} ${startAngle.toFixed(2)}deg ${endAngle.toFixed(2)}deg`;
-        startAngle = endAngle;
-        return segment;
-      });
-      const chartBackground = segments.length
-        ? `conic-gradient(from -90deg, ${segments.join(", ")})`
-        : "conic-gradient(from -90deg, rgba(224, 122, 139, 0.25) 0deg 360deg)";
-      const budgetVisual = decoratedBudgetEntries.length
-        ? decoratedBudgetEntries
-            .map((entry, index) => {
-              const amount = Number(entry.amount || 0);
-              const displayId = `budget-amount-${entry.id || index}`;
-              const isEditing = this.state.budgetEditingId === entry.id;
-              if (isEditing) {
-                const draft = this.state.budgetEditingDraft || {
-                  title: entry.title || "",
-                  amount: String(amount ?? "")
-                };
-                return `
-                  <div class="budget-visual__item budget-visual__item--editing" data-entry-id="${this.escapeHtml(entry.id)}">
-                    <form class="budget-visual__edit" data-entry-id="${this.escapeHtml(entry.id)}">
-                      <div class="budget-visual__edit-fields">
-                        <span class="budget-visual__dot" style="--dot-color: ${entry.color}" aria-hidden="true"></span>
-                        <div class="budget-visual__field">
-                          <label for="budget-edit-title-${this.escapeHtml(entry.id)}" class="sr-only">Название статьи</label>
-                          <input id="budget-edit-title-${this.escapeHtml(entry.id)}" type="text" name="title" value="${this.escapeHtml(draft.title || "")}" required>
-                        </div>
-                        <div class="budget-visual__field">
-                          <label for="budget-edit-amount-${this.escapeHtml(entry.id)}" class="sr-only">Сумма</label>
-                          <input id="budget-edit-amount-${this.escapeHtml(entry.id)}" type="number" name="amount" value="${this.escapeHtml(String(draft.amount ?? ""))}" min="0" step="1000" required>
-                        </div>
-                      </div>
-                      <div class="budget-visual__edit-actions">
-                        <button type="submit">Сохранить</button>
-                        <button type="button" class="secondary" data-action="cancel-edit">Отменить</button>
-                      </div>
-                    </form>
-                  </div>
-                `;
-              }
-              return `
-                <div class="budget-visual__item" data-entry-id="${this.escapeHtml(entry.id)}">
-                  <div class="budget-visual__info">
-                    <span class="budget-visual__dot" style="--dot-color: ${entry.color}" aria-hidden="true"></span>
-                    <span class="budget-visual__title">${this.escapeHtml(entry.title || "")}</span>
-                    <span class="budget-visual__amount" id="${this.escapeHtml(displayId)}" data-amount="${amount}">${this.formatCurrency(amount)}</span>
-                    <div class="budget-visual__actions">
-                      <button type="button" class="budget-visual__action" data-action="edit" data-entry-id="${this.escapeHtml(entry.id)}" aria-label="Редактировать статью">
-                        <span aria-hidden="true">✏️</span>
-                        <span class="sr-only">Изменить</span>
-                      </button>
-                      <button type="button" class="budget-visual__action budget-visual__action--danger" data-action="delete" data-entry-id="${this.escapeHtml(entry.id)}" aria-label="Удалить статью">
-                        <span aria-hidden="true">🗑️</span>
-                        <span class="sr-only">Удалить</span>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="budget-visual__track">
-                    <div class="budget-visual__bar" data-value="${amount}" data-total="${totalBudget}" style="--bar-color: ${entry.color}"></div>
-                  </div>
-                </div>
-              `;
-            })
-            .join("")
-        : '<p class="budget-empty">Добавьте статьи, чтобы увидеть распределение бюджета.</p>';
       const marketplaceModule = this.renderMarketplaceModule(backgroundInertAttributes);
       const warningBlock =
         this.state.profileSyncStatus === "degraded"
@@ -287,27 +204,8 @@
           </header>
           <div class="${modulesClasses}">
             ${checklistOverlay}
-            <section class="${checklistContainerClasses}" data-area="checklist" aria-labelledby="checklist-title" data-expanded="${isChecklistExpanded}">
-              <div class="module-header">
-                <h2 id="checklist-title">Чек лист</h2>
-                <div class="module-header__actions">
-                  <button type="button" class="module-header__icon-button" data-action="create-checklist-folder" aria-label="Создать папку" title="Создать папку">
-                    <span aria-hidden="true">📁</span>
-                  </button>
-                  <button type="button" class="module-header__icon-button" data-action="toggle-checklist-expand" aria-label="${expandLabel}" aria-expanded="${isChecklistExpanded}">
-                    <span aria-hidden="true">${expandIcon}</span>
-                  </button>
-                </div>
-              </div>
-              <ul class="checklist-items">
-                ${checklistItems}
-              </ul>
-              <form id="checklist-form" class="checklist-form" data-prevent-expand>
-                <label for="checklist-input" class="sr-only">Новая задача</label>
-                <input id="checklist-input" type="text" name="task" placeholder="Добавить задачу" autocomplete="off" required>
-                <button type="submit">Добавить</button>
-              </form>
-            </section>
+            ${timelineModule.markup || ""}
+            ${checklistMarkup}
             <section class="dashboard-module tools" data-area="tools" aria-labelledby="tools-title"${backgroundInertAttributes}>
               <div class="module-header">
                 <h2 id="tools-title">Инструменты</h2>
@@ -316,30 +214,7 @@
                 ${toolsCards}
               </div>
             </section>
-            <section class="dashboard-module budget" data-area="budget" aria-labelledby="budget-title"${backgroundInertAttributes}>
-              <div class="module-header">
-                <h2 id="budget-title">Бюджет</h2>
-              </div>
-              <div class="budget-summary">
-                <div class="budget-summary__chart" role="img" aria-label="Итоговый бюджет: ${this.formatCurrency(totalBudget)}" style="--budget-chart-bg: ${chartBackground};">
-                  <div class="budget-summary__total">
-                    <span class="budget-summary__value" id="budget-total" data-previous="${previousTotal}">${this.formatCurrency(totalBudget)}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="budget-visual">
-                ${budgetVisual}
-              </div>
-              <form id="budget-form" class="budget-form">
-                <div class="budget-form__fields">
-                  <label for="budget-title" class="sr-only">Название статьи расходов</label>
-                  <input id="budget-title" type="text" name="title" placeholder="Название" required>
-                  <label for="budget-amount" class="sr-only">Сумма</label>
-                  <input id="budget-amount" type="number" name="amount" placeholder="Сумма" min="0" step="1000" required>
-                </div>
-                <button type="submit">Добавить расход</button>
-              </form>
-            </section>
+            ${budgetMarkup}
             ${marketplaceModule}
           </div>
         </section>

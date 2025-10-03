@@ -9,11 +9,20 @@ const {
   issueTokens,
   rotateRefreshToken
 } = require('../src/services/auth');
+const {
+  DEFAULT_CHECKLIST_ITEMS,
+  DEFAULT_CHECKLIST_FOLDERS,
+  DEFAULT_BUDGET_ENTRIES,
+  DEFAULT_WEDDING_TIMELINE,
+  DEFAULT_CONTRACTOR_TIMELINE
+} = require('../src/server/profile-defaults');
 
 const prisma = getPrismaClient();
 const router = express.Router();
 
 const ALLOWED_REGISTRATION_ROLES = new Set(['wedding', 'contractor']);
+
+const clone = (value) => JSON.parse(JSON.stringify(value));
 
 function normalizeRole(role) {
   if (!role || typeof role !== 'string') {
@@ -94,13 +103,21 @@ router.post('/register', async (req, res) => {
       if (normalizedRole === 'contractor') {
         await tx.contractorProfile.create({
           data: {
-            userId: user.id
+            userId: user.id,
+            timeline: clone(DEFAULT_CONTRACTOR_TIMELINE),
+            checklist: clone(DEFAULT_CHECKLIST_ITEMS),
+            checklistFolders: clone(DEFAULT_CHECKLIST_FOLDERS),
+            budgetEntries: clone(DEFAULT_BUDGET_ENTRIES)
           }
         });
       } else {
         await tx.weddingProfile.create({
           data: {
-            userId: user.id
+            userId: user.id,
+            timeline: clone(DEFAULT_WEDDING_TIMELINE),
+            checklist: clone(DEFAULT_CHECKLIST_ITEMS),
+            checklistFolders: clone(DEFAULT_CHECKLIST_FOLDERS),
+            budgetEntries: clone(DEFAULT_BUDGET_ENTRIES)
           }
         });
       }

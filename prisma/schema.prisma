@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -23,25 +23,33 @@ model User {
 }
 
 model ContractorProfile {
-  id          String   @id @default(uuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id])
-  companyName String   @default("")
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id])
+  companyName      String   @default("")
+  description      String?
+  timeline         Json     @default("[]")
+  checklist        Json     @default("[]")
+  checklistFolders Json     @default("[]")
+  budgetEntries    Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model WeddingProfile {
-  id            String   @id @default(uuid())
-  userId        String   @unique
-  user          User     @relation(fields: [userId], references: [id])
-  coupleNames   String   @default("")
-  eventDate     DateTime?
-  location      String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  guests        Guest[]
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id])
+  coupleNames      String   @default("")
+  eventDate        DateTime?
+  location         String?
+  timeline         Json     @default("[]")
+  checklist        Json     @default("[]")
+  checklistFolders Json     @default("[]")
+  budgetEntries    Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  guests           Guest[]
 }
 
 model InvitationMeta {
