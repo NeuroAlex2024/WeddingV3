@@ -32,6 +32,11 @@ model ContractorProfile {
   checklist        Json     @default("[]")
   checklistFolders Json     @default("[]")
   budgetEntries    Json     @default("[]")
+  services        Json     @default("[]")
+  portfolio       Json     @default("[]")
+  priceFrom       Int?
+  coverImageUrl   String?
+  isPublished     Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }

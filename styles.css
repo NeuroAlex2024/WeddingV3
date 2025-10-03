@@ -231,6 +231,153 @@ button.secondary:hover {
   color: var(--accent);
 }
 
+.auth-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  align-items: center;
+}
+
+.auth-controls button {
+  padding: 0.55rem 1.5rem;
+  border-radius: 12px;
+}
+
+.auth-controls--status {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.auth-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.auth-form__tabs {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 0.25rem;
+  background: rgba(224, 122, 139, 0.12);
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.auth-form__tab {
+  flex: 1;
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
+  border: none;
+  background: transparent;
+  color: var(--accent-dark);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-form__tab--active {
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(224, 122, 139, 0.2);
+}
+
+.auth-form__roles {
+  border: 1px solid rgba(224, 122, 139, 0.25);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.auth-form__roles[hidden] {
+  display: none;
+}
+
+.auth-form__roles label {
+  font-weight: 500;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.auth-form__error {
+  min-height: 1.2rem;
+  color: #d83a52;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.auth-form button[type="submit"] {
+  justify-self: flex-start;
+}
+
+.contractor-dashboard {
+  display: grid;
+  gap: 2rem;
+  margin-top: 1.5rem;
+}
+
+@media (min-width: 960px) {
+  .contractor-dashboard {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.contractor-card-form {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.contractor-card-form__grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.contractor-card-form__publish {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.contractor-card-form__actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.contractor-card-form__status {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.contractor-card-form__status[data-status="success"] {
+  color: var(--success);
+}
+
+.contractor-card-form__status[data-status="error"] {
+  color: #d83a52;
+}
+
+.contractor-card-form button[disabled] {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.contractor-card-preview {
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 18px;
+  padding: 1.5rem;
+  box-shadow: inset 0 0 0 1px rgba(110, 103, 129, 0.12);
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.contractor-card-preview h2 {
+  margin: 0;
+}
+
 .actions {
   display: flex;
   justify-content: space-between;
@@ -1066,6 +1213,22 @@ button.secondary:hover {
   margin: 0;
   font-weight: 600;
   color: var(--accent-dark);
+}
+
+.marketplace-card__services {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.marketplace-card__services span {
+  background: rgba(224, 122, 139, 0.12);
+  color: var(--accent-dark);
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
 }
 
 .marketplace-card__description {

@@ -3,6 +3,18 @@ const express = require('express');
 const { getPrismaClient } = require('../src/db/client');
 const config = require('../src/server/config');
 const {
+  coerceArray,
+  normalizeServicesList,
+  normalizePortfolioItems,
+  normalizePriceFrom,
+  normalizeCoverImageUrl,
+  normalizePublicationFlag,
+  buildContractorCard,
+  parsePriceFromInput,
+  parseCoverImageInput,
+  parsePublicationInput
+} = require('../src/server/contractor-card');
+const {
   DEFAULT_CHECKLIST_ITEMS,
   DEFAULT_CHECKLIST_FOLDERS,
   DEFAULT_BUDGET_ENTRIES,
@@ -22,21 +34,6 @@ class ValidationError extends Error {
 }
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
-
-const coerceArray = (value) => {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (typeof value === 'string' && value.trim().length) {
-    try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      return [];
-    }
-  }
-  return [];
-};
 
 const sanitizeTimelineInput = (value, role, { fallbackOnEmpty = false } = {}) => {
   const rawArray = coerceArray(value);
@@ -185,13 +182,23 @@ const deserializeProfileModules = (profile, role) => {
   const checklistSanitized = sanitizeChecklistItems(profile.checklist);
   const foldersSanitized = sanitizeChecklistFolders(profile.checklistFolders);
   const budgetSanitized = sanitizeBudgetEntries(profile.budgetEntries);
-  return {
+  const baseProfile = {
     ...profile,
     timeline,
     checklist: checklistSanitized.items.length ? checklistSanitized.items : clone(DEFAULT_CHECKLIST_ITEMS),
     checklistFolders: foldersSanitized.folders,
     budgetEntries: budgetSanitized.entries.length ? budgetSanitized.entries : clone(DEFAULT_BUDGET_ENTRIES)
   };
+  if (safeRole === 'contractor') {
+    const contractorCard = buildContractorCard(profile);
+    baseProfile.services = contractorCard?.services ?? normalizeServicesList(profile.services);
+    baseProfile.portfolio = contractorCard?.portfolio ?? normalizePortfolioItems(profile.portfolio);
+    baseProfile.priceFrom = contractorCard?.priceFrom ?? normalizePriceFrom(profile.priceFrom);
+    baseProfile.coverImageUrl = contractorCard?.coverImageUrl ?? normalizeCoverImageUrl(profile.coverImageUrl);
+    baseProfile.isPublished = contractorCard?.isPublished ?? normalizePublicationFlag(profile.isPublished);
+    baseProfile.marketplaceCard = contractorCard;
+  }
+  return baseProfile;
 };
 
 const collectModulesFromBody = (body, role) => {
@@ -261,6 +268,7 @@ function buildProfileResponse(user) {
   }
   const contractorProfile = deserializeProfileModules(user.contractorProfile ?? null, 'contractor');
   const weddingProfile = deserializeProfileModules(user.weddingProfile ?? null, 'wedding');
+  const contractorCard = contractorProfile?.marketplaceCard ?? (contractorProfile ? buildContractorCard(contractorProfile) : null);
   let activeProfile = null;
   if (user.role === 'contractor') {
     activeProfile = contractorProfile;
@@ -274,7 +282,8 @@ function buildProfileResponse(user) {
     user: sanitizeUser(user),
     profile: activeProfile,
     contractorProfile,
-    weddingProfile
+    weddingProfile,
+    contractorCard
   };
 }
 
@@ -346,6 +355,11 @@ router.put('/', async (req, res) => {
 
     if (role === 'contractor') {
       const updateData = {};
+      let servicesSanitized;
+      let portfolioSanitized;
+      let priceSanitized;
+      let coverImageSanitized;
+      let publicationSanitized;
       if (Object.prototype.hasOwnProperty.call(body, 'companyName')) {
         if (typeof body.companyName !== 'string') {
           return res.status(400).json({ error: 'Название компании должно быть строкой.' });
@@ -363,6 +377,44 @@ router.put('/', async (req, res) => {
           updateData.description = null;
         }
       }
+      if (Object.prototype.hasOwnProperty.call(body, 'services')) {
+        servicesSanitized = normalizeServicesList(body.services);
+        updateData.services = servicesSanitized;
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'portfolio')) {
+        portfolioSanitized = normalizePortfolioItems(body.portfolio);
+        updateData.portfolio = portfolioSanitized;
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'priceFrom')) {
+        const parsedPrice = parsePriceFromInput(body.priceFrom);
+        if (parsedPrice.error) {
+          return res.status(400).json({ error: 'Минимальная стоимость должна быть числом или пустым значением.' });
+        }
+        if (parsedPrice.provided) {
+          priceSanitized = parsedPrice.value ?? null;
+          updateData.priceFrom = priceSanitized;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'coverImageUrl')) {
+        const parsedCover = parseCoverImageInput(body.coverImageUrl);
+        if (parsedCover.error) {
+          return res.status(400).json({ error: 'URL обложки должен быть строкой или null.' });
+        }
+        if (parsedCover.provided) {
+          coverImageSanitized = parsedCover.value ?? null;
+          updateData.coverImageUrl = coverImageSanitized;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(body, 'isPublished')) {
+        const parsedPublication = parsePublicationInput(body.isPublished);
+        if (parsedPublication.error) {
+          return res.status(400).json({ error: 'Признак публикации должен быть булевым значением.' });
+        }
+        if (parsedPublication.provided) {
+          publicationSanitized = Boolean(parsedPublication.value);
+          updateData.isPublished = publicationSanitized;
+        }
+      }
 
       const serializedModules = serializeModules(modulesData);
       await prisma.contractorProfile.upsert({
@@ -372,6 +424,11 @@ router.put('/', async (req, res) => {
           userId,
           companyName: updateData.companyName ?? '',
           description: updateData.description ?? null,
+          services: servicesSanitized ?? [],
+          portfolio: portfolioSanitized ?? [],
+          priceFrom: priceSanitized ?? null,
+          coverImageUrl: coverImageSanitized ?? null,
+          isPublished: publicationSanitized ?? false,
           ...serializeModules(applyDefaultsForCreate(modulesData, modulesProvided, role))
         }
       });

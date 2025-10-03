@@ -409,9 +409,8 @@
       checklistFolderEditingId: null,
       checklistFolderEditingDraft: null,
       checklistDragTaskId: null,
-      marketplaceCategoryId: Array.isArray(CONTRACTOR_MARKETPLACE) && CONTRACTOR_MARKETPLACE.length
-        ? CONTRACTOR_MARKETPLACE[0].id
-        : null,
+      marketplaceCategoryId: 'all',
+      marketplaceCatalog: null,
       marketplaceFavorites: new Set(),
       marketplaceSelections: {},
       websiteFormOpen: null,
@@ -445,6 +444,14 @@
         }
       } else if (!this.state.profile) {
         this.ensureProfile();
+      }
+      const normalizedRoleAfterInit = this.normalizeRole(this.state.currentRole);
+      if (normalizedRoleAfterInit === 'wedding') {
+        try {
+          await this.fetchMarketplaceCatalog();
+        } catch (catalogError) {
+          console.warn('Каталог подрядчиков недоступен', catalogError);
+        }
       }
       const initialHash = location.hash;
       const roleDefaultRoute = this.getDefaultRouteForRole(this.state.currentRole);
@@ -500,6 +507,40 @@
         }
       };
       window.addEventListener("resize", this.handleBudgetResize);
+      if (this.appEl) {
+        this.appEl.addEventListener('click', (event) => {
+          const loginBtn = event.target.closest('[data-action="open-login"]');
+          if (loginBtn) {
+            event.preventDefault();
+            if (typeof this.renderAuthModal === 'function') {
+              this.renderAuthModal({ mode: 'login' });
+            }
+            return;
+          }
+          const registerBtn = event.target.closest('[data-action="open-register"]');
+          if (registerBtn) {
+            event.preventDefault();
+            if (typeof this.renderAuthModal === 'function') {
+              this.renderAuthModal({ mode: 'register' });
+            }
+          }
+        });
+      }
+      if (this.modalDialog) {
+        this.modalDialog.addEventListener('click', (event) => {
+          const switchBtn = event.target.closest('[data-action="switch-auth"]');
+          if (switchBtn) {
+            event.preventDefault();
+            this.switchAuthMode(switchBtn.dataset.mode);
+          }
+        });
+        this.modalDialog.addEventListener('submit', async (event) => {
+          if (event.target && event.target.id === 'auth-form') {
+            event.preventDefault();
+            await this.handleAuthSubmit(event.target);
+          }
+        });
+      }
     },
     normalizeRole(role) {
       if (role && this.routeAccessByRole[role]) {
@@ -592,6 +633,16 @@
         if (Object.prototype.hasOwnProperty.call(contractorProfileCandidate, "description")) {
           baseProfile.contractorDescription = contractorProfileCandidate.description ?? null;
         }
+        if (
+          Object.prototype.hasOwnProperty.call(contractorProfileCandidate, "marketplaceCard") &&
+          contractorProfileCandidate.marketplaceCard &&
+          typeof contractorProfileCandidate.marketplaceCard === "object"
+        ) {
+          baseProfile.contractorCard = { ...contractorProfileCandidate.marketplaceCard };
+        }
+      }
+      if (payload.contractorCard && typeof payload.contractorCard === "object") {
+        baseProfile.contractorCard = { ...payload.contractorCard };
       }
       if (weddingProfileCandidate && typeof weddingProfileCandidate === "object") {
         baseProfile.weddingProfile = { ...weddingProfileCandidate };
@@ -772,6 +823,121 @@
         entries: sanitized
       };
     },
+    normalizeMarketplaceCard(card, index = 0) {
+      if (!card || typeof card !== "object") {
+        return null;
+      }
+      const safeIndex = Number.isFinite(index) ? Number(index) : 0;
+      const rawId = typeof card.id === "string" && card.id.trim().length ? card.id.trim() : `contractor-${safeIndex + 1}`;
+      const name = typeof card.name === "string" && card.name.trim().length ? card.name.trim() : `Подрядчик ${safeIndex + 1}`;
+      const description = typeof card.description === "string" && card.description.trim().length ? card.description.trim() : "";
+      const priceValue = Number(card.priceFrom ?? card.price ?? null);
+      const priceFrom = Number.isFinite(priceValue) ? Math.max(0, Math.round(priceValue)) : null;
+      const coverImageUrl = typeof card.coverImageUrl === "string" && card.coverImageUrl.trim().length
+        ? card.coverImageUrl.trim()
+        : null;
+      const city = typeof card.city === "string" && card.city.trim().length ? card.city.trim() : "";
+      const services = Array.isArray(card.services)
+        ? card.services
+            .map((service, serviceIndex) => {
+              if (!service) {
+                return null;
+              }
+              if (typeof service === "string") {
+                const label = service.trim();
+                if (!label) {
+                  return null;
+                }
+                return { id: `service-${serviceIndex + 1}`, title: label };
+              }
+              if (typeof service !== "object") {
+                return null;
+              }
+              const serviceId = typeof service.id === "string" && service.id.trim().length
+                ? service.id.trim()
+                : `service-${serviceIndex + 1}`;
+              const titleCandidate = typeof service.title === "string" && service.title.trim().length
+                ? service.title.trim()
+                : typeof service.name === "string" && service.name.trim().length
+                ? service.name.trim()
+                : "";
+              if (!titleCandidate) {
+                return null;
+              }
+              const serviceDescription = typeof service.description === "string" && service.description.trim().length
+                ? service.description.trim()
+                : "";
+              return { id: serviceId, title: titleCandidate, description: serviceDescription };
+            })
+            .filter(Boolean)
+        : [];
+      return { id: rawId, name, description, services, priceFrom, coverImageUrl, city };
+    },
+    normalizeMarketplaceCatalog(rawCards) {
+      const source = Array.isArray(rawCards) ? rawCards : [];
+      return source.map((card, index) => this.normalizeMarketplaceCard(card, index)).filter(Boolean);
+    },
+    collectContractorCardFormData(form) {
+      if (!form || typeof form.querySelector !== "function") {
+        return null;
+      }
+      const getValue = (name) => {
+        const element = form.querySelector(`[name="${name}"]`);
+        if (!element) {
+          return "";
+        }
+        if (element.type === "checkbox") {
+          return element.checked;
+        }
+        return element.value ?? "";
+      };
+      const companyName = String(getValue("companyName")).trim();
+      const descriptionRaw = String(getValue("description"));
+      const servicesRaw = String(getValue("services"));
+      const portfolioRaw = String(getValue("portfolio"));
+      const priceRaw = String(getValue("priceFrom")).trim();
+      const coverRaw = String(getValue("coverImageUrl")).trim();
+      const isPublished = Boolean(getValue("isPublished"));
+      const services = servicesRaw
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .filter((item) => item.length);
+      let priceValue = null;
+      if (priceRaw.length) {
+        const parsed = Number(priceRaw);
+        priceValue = Number.isFinite(parsed) ? parsed : priceRaw;
+      }
+      const portfolio = portfolioRaw
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .filter((item) => item.length)
+        .map((entry, index) => {
+          const parts = entry.split("|").map((part) => part.trim()).filter(Boolean);
+          const hasTitleAndUrl = parts.length >= 2;
+          const title = hasTitleAndUrl ? parts[0] : "";
+          const url = hasTitleAndUrl ? parts[1] : parts[0];
+          const safeUrl = url || "";
+          if (!safeUrl) {
+            return null;
+          }
+          return {
+            id: `portfolio-${index + 1}`,
+            title: title || `Работа ${index + 1}`,
+            imageUrl: safeUrl,
+            linkUrl: safeUrl
+          };
+        })
+        .filter(Boolean);
+      return {
+        companyName,
+        description: descriptionRaw,
+        services,
+        priceFrom: priceRaw.length ? priceValue : null,
+        coverImageUrl: coverRaw || null,
+        portfolio,
+        isPublished
+      };
+    },
     getTimelineItems(profile, role) {
       const targetRole = role || profile?.role || this.state.currentRole;
       const normalizedRole = this.normalizeRole(targetRole);
@@ -845,6 +1011,16 @@
           const merged = this.applyServerProfilePayload(response.data, { persist });
           this.state.profileSyncStatus = "ok";
           this.state.profileSyncError = null;
+          const resolvedRole = this.normalizeRole(
+            merged?.user?.role || this.state.currentRole || (response.data.user && response.data.user.role)
+          );
+          if (resolvedRole === "wedding") {
+            try {
+              await this.fetchMarketplaceCatalog({ force: true });
+            } catch (catalogError) {
+              console.warn("Не удалось обновить каталог подрядчиков", catalogError);
+            }
+          }
           return { ok: true, data: merged };
         }
         if (response.status === 503) {
@@ -883,6 +1059,226 @@
       } catch (error) {
         console.error("Не удалось обновить профиль на сервере", error);
         return { ok: false, error };
+      }
+    },
+    async fetchMarketplaceCatalog(options = {}) {
+      const { force = false } = options;
+      if (!force && Array.isArray(this.state.marketplaceCatalog) && this.state.marketplaceCatalog.length) {
+        return { ok: true, data: this.state.marketplaceCatalog, cached: true };
+      }
+      if (!this.apiClient || typeof this.apiClient.getJson !== "function") {
+        const fallback = this.normalizeMarketplaceCatalog(CONTRACTOR_MARKETPLACE);
+        this.state.marketplaceCatalog = fallback;
+        return { ok: false, reason: "unavailable", data: fallback, fromFallback: true };
+      }
+      try {
+        const response = await this.apiClient.getJson('/api/marketplace/contractors');
+        const cards = Array.isArray(response?.contractors) ? response.contractors : [];
+        const normalized = this.normalizeMarketplaceCatalog(cards);
+        if (normalized.length) {
+          this.state.marketplaceCatalog = normalized;
+          return { ok: true, data: normalized };
+        }
+        const fallback = this.normalizeMarketplaceCatalog(CONTRACTOR_MARKETPLACE);
+        this.state.marketplaceCatalog = fallback;
+        return { ok: true, data: fallback, fromFallback: true };
+      } catch (error) {
+        console.error('Не удалось получить каталог подрядчиков', error);
+        const fallback = this.normalizeMarketplaceCatalog(CONTRACTOR_MARKETPLACE);
+        this.state.marketplaceCatalog = fallback;
+        return { ok: false, error, data: fallback, fromFallback: true };
+      }
+    },
+    async handleContractorCardSubmit(form) {
+      if (!form) {
+        return;
+      }
+      const statusEl = form.querySelector('[data-contract-status]');
+      const submitButton = form.querySelector('button[type="submit"]');
+      const payload = this.collectContractorCardFormData(form);
+      if (!payload) {
+        if (statusEl) {
+          statusEl.textContent = 'Не удалось прочитать данные формы.';
+          statusEl.dataset.status = 'error';
+        }
+        return;
+      }
+      if (!payload.companyName) {
+        if (statusEl) {
+          statusEl.textContent = 'Укажите название компании.';
+          statusEl.dataset.status = 'error';
+        }
+        const companyInput = form.querySelector('[name="companyName"]');
+        if (companyInput) {
+          companyInput.focus();
+        }
+        return;
+      }
+      if (statusEl) {
+        statusEl.textContent = 'Сохраняем изменения...';
+        statusEl.dataset.status = 'pending';
+      }
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.dataset.loading = 'true';
+      }
+      try {
+        const result = await this.updateServerProfile(payload, { persist: true });
+        if (result.ok) {
+          if (statusEl) {
+            statusEl.textContent = 'Карточка сохранена.';
+            statusEl.dataset.status = 'success';
+          }
+          try {
+            await this.fetchMarketplaceCatalog({ force: true });
+          } catch (catalogError) {
+            console.warn('Не удалось обновить каталог после сохранения карточки', catalogError);
+          }
+          this.renderDashboard();
+        } else {
+          const errorMessage =
+            (result && result.data && result.data.error) ||
+            (result && result.error && result.error.message) ||
+            'Не удалось сохранить карточку. Попробуйте позже.';
+          if (statusEl) {
+            statusEl.textContent = errorMessage;
+            statusEl.dataset.status = 'error';
+          }
+        }
+      } catch (error) {
+        console.error('Не удалось сохранить карточку подрядчика', error);
+        if (statusEl) {
+          statusEl.textContent = 'Произошла ошибка при сохранении. Проверьте подключение и повторите попытку.';
+          statusEl.dataset.status = 'error';
+        }
+      } finally {
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.dataset.loading = 'false';
+        }
+      }
+    },
+    switchAuthMode(mode) {
+      if (!this.modalBody) {
+        return;
+      }
+      const form = this.modalBody.querySelector('#auth-form');
+      if (!form) {
+        return;
+      }
+      const normalized = mode === 'register' ? 'register' : 'login';
+      form.dataset.mode = normalized;
+      form.querySelectorAll('.auth-form__tab').forEach((tab) => {
+        const tabMode = tab.dataset.mode === 'register' ? 'register' : 'login';
+        const isActive = tabMode === normalized;
+        tab.classList.toggle('auth-form__tab--active', isActive);
+        tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      const rolesFieldset = form.querySelector('.auth-form__roles');
+      if (rolesFieldset) {
+        if (normalized === 'register') {
+          rolesFieldset.removeAttribute('hidden');
+        } else {
+          rolesFieldset.setAttribute('hidden', '');
+        }
+      }
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) {
+        submitButton.textContent = normalized === 'register' ? 'Создать аккаунт' : 'Войти';
+      }
+      const titleEl = document.getElementById('modal-title');
+      if (titleEl) {
+        titleEl.textContent = normalized === 'register' ? 'Создать аккаунт' : 'Войти в аккаунт';
+      }
+      const errorEl = form.querySelector('[data-auth-error]');
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.dataset.status = '';
+      }
+      const passwordInput = form.querySelector('[name="password"]');
+      if (passwordInput) {
+        passwordInput.value = '';
+      }
+      const phoneInput = form.querySelector('[name="phone"]');
+      if (phoneInput) {
+        phoneInput.focus();
+        if (typeof phoneInput.select === 'function') {
+          phoneInput.select();
+        }
+      }
+    },
+    async handleAuthSubmit(form) {
+      if (!form) {
+        return;
+      }
+      const mode = form.dataset.mode === 'register' ? 'register' : 'login';
+      const phoneInput = form.querySelector('[name="phone"]');
+      const passwordInput = form.querySelector('[name="password"]');
+      const roleInput = form.querySelector('[name="role"]:checked');
+      const errorEl = form.querySelector('[data-auth-error]');
+      const submitButton = form.querySelector('button[type="submit"]');
+      const phone = phoneInput ? phoneInput.value.trim() : '';
+      const password = passwordInput ? passwordInput.value : '';
+      if (!phone || !password) {
+        if (errorEl) {
+          errorEl.textContent = 'Введите телефон и пароль.';
+          errorEl.dataset.status = 'error';
+        }
+        if (!phone && phoneInput) {
+          phoneInput.focus();
+        } else if (!password && passwordInput) {
+          passwordInput.focus();
+        }
+        return;
+      }
+      if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.dataset.status = '';
+      }
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.dataset.loading = 'true';
+      }
+      try {
+        let response;
+        if (mode === 'register') {
+          const roleValue = roleInput && roleInput.value ? roleInput.value : 'wedding';
+          response = await this.apiClient.registerWithPhone(phone, password, { role: roleValue });
+        } else {
+          response = await this.apiClient.loginWithPhone(phone, password);
+        }
+        if (!response || !response.ok) {
+          const errorMessage =
+            (response && response.data && response.data.error) ||
+            (response && response.error && response.error.message) ||
+            'Не удалось выполнить действие. Проверьте данные и повторите попытку.';
+          if (errorEl) {
+            errorEl.textContent = errorMessage;
+            errorEl.dataset.status = 'error';
+          }
+          return;
+        }
+        this.refreshAuthState();
+        await this.refreshProfileFromServer({ silent: true, persist: true });
+        if (this.state.currentRole === 'wedding') {
+          await this.fetchMarketplaceCatalog({ force: true });
+        }
+        this.closeModal();
+        if (location.hash !== '#/dashboard') {
+          location.hash = '#/dashboard';
+        }
+        this.render();
+      } catch (error) {
+        console.error('Не удалось выполнить авторизацию', error);
+        if (errorEl) {
+          errorEl.textContent = 'Произошла ошибка соединения. Попробуйте позже.';
+          errorEl.dataset.status = 'error';
+        }
+      } finally {
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.dataset.loading = 'false';
+        }
       }
     },
     handleRouteChange() {
@@ -2608,6 +3004,13 @@
           this.toggleMarketplaceFavorite(vendorId);
         });
       });
+      const contractorForm = document.getElementById('contractor-card-form');
+      if (contractorForm) {
+        contractorForm.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          await this.handleContractorCardSubmit(contractorForm);
+        });
+      }
       this.animateBudget(previousTotal, totalBudget);
     },
     getFocusableElements(container) {
