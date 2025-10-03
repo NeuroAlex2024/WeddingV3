@@ -6,6 +6,61 @@
   const WEBSITE_THEMES = core.WEBSITE_THEMES || [];
 
   const AppViews = {
+    renderAuthControls() {
+      const isAuthenticated =
+        this.authStore && typeof this.authStore.isAuthenticated === "function"
+          ? this.authStore.isAuthenticated()
+          : Boolean(this.state?.auth?.isAuthenticated);
+      if (isAuthenticated) {
+        const role = this.state?.currentRole || this.state?.auth?.role || this.defaultAuthState.role;
+        return `<div class="auth-controls auth-controls--status" role="status">Вы вошли как <strong>${this.escapeHtml(role)}</strong></div>`;
+      }
+      return `
+        <div class="auth-controls">
+          <button type="button" data-action="open-login">Войти</button>
+          <button type="button" class="secondary" data-action="open-register">Создать аккаунт</button>
+        </div>
+      `;
+    },
+
+    renderAuthModal({ mode = "login" } = {}) {
+      const normalizedMode = mode === "register" ? "register" : "login";
+      if (!this.modalOverlay || !this.modalBody || !this.modalCloseBtn) {
+        return;
+      }
+      this.state.modalOpen = true;
+      this.state.lastFocused = document.activeElement;
+      const titleEl = document.getElementById("modal-title");
+      if (titleEl) {
+        titleEl.textContent = normalizedMode === "register" ? "Создать аккаунт" : "Войти в аккаунт";
+      }
+      this.modalBody.innerHTML = `
+        <form id="auth-form" class="auth-form" data-mode="${normalizedMode}">
+          <div class="auth-form__tabs" role="tablist">
+            <button type="button" class="auth-form__tab${normalizedMode === "login" ? " auth-form__tab--active" : ""}" data-action="switch-auth" data-mode="login" role="tab" aria-selected="${normalizedMode === "login"}">Войти</button>
+            <button type="button" class="auth-form__tab${normalizedMode === "register" ? " auth-form__tab--active" : ""}" data-action="switch-auth" data-mode="register" role="tab" aria-selected="${normalizedMode === "register"}">Создать аккаунт</button>
+          </div>
+          <label for="auth-phone">Телефон</label>
+          <input id="auth-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="+7 (999) 123-45-67">
+          <label for="auth-password">Пароль</label>
+          <input id="auth-password" name="password" type="password" autocomplete="current-password" required minlength="6">
+          <fieldset class="auth-form__roles"${normalizedMode === "register" ? "" : " hidden"}>
+            <legend>Роль</legend>
+            <label><input type="radio" name="role" value="wedding" checked> Планирую свадьбу</label>
+            <label><input type="radio" name="role" value="contractor"> Предлагаю услуги</label>
+          </fieldset>
+          <p class="auth-form__error" data-auth-error role="alert"></p>
+          <button type="submit">${normalizedMode === "register" ? "Создать аккаунт" : "Войти"}</button>
+        </form>
+      `;
+      this.modalOverlay.classList.add("active");
+      this.modalOverlay.setAttribute("aria-hidden", "false");
+      this.modalCloseBtn.focus();
+      if (typeof this.switchAuthMode === "function") {
+        this.switchAuthMode(normalizedMode);
+      }
+    },
+
     renderQuiz() {
       this.teardownChecklistFocusTrap();
       document.body.classList.remove("checklist-expanded");
@@ -61,25 +116,160 @@
         typeof this.normalizeRole === "function"
           ? this.normalizeRole(serverSnapshot?.user?.role || profile?.role || this.state.currentRole)
           : this.state.currentRole;
-      const activeServerProfile =
-        typeof this.getActiveServerProfile === "function"
-          ? this.getActiveServerProfile(serverSnapshot, normalizedRole)
-          : null;
+
+      if (normalizedRole === "contractor") {
+        document.body.classList.remove("checklist-expanded");
+        const contractorProfile =
+          (serverSnapshot && serverSnapshot.contractorProfile) || profile?.contractorProfile || {};
+        const contractorCardSource =
+          serverSnapshot?.contractorCard ||
+          contractorProfile?.marketplaceCard ||
+          profile?.contractorCard ||
+          contractorProfile;
+        const sanitizedCard =
+          typeof this.normalizeMarketplaceCard === "function"
+            ? this.normalizeMarketplaceCard(contractorCardSource || {}, 0)
+            : contractorCardSource && typeof contractorCardSource === "object"
+            ? contractorCardSource
+            : {};
+        const companyNameValue =
+          typeof contractorProfile.companyName === "string"
+            ? contractorProfile.companyName
+            : sanitizedCard?.name || "";
+        const descriptionValue =
+          typeof contractorProfile.description === "string"
+            ? contractorProfile.description
+            : sanitizedCard?.description || "";
+        const servicesValue = Array.isArray(sanitizedCard?.services)
+          ? sanitizedCard.services
+              .map((service) => {
+                if (!service) {
+                  return "";
+                }
+                if (typeof service === "string") {
+                  return service;
+                }
+                if (typeof service.title === "string" && service.title.trim().length) {
+                  return service.title.trim();
+                }
+                if (typeof service.name === "string" && service.name.trim().length) {
+                  return service.name.trim();
+                }
+                return "";
+              })
+              .filter(Boolean)
+              .join("\n")
+          : "";
+        const rawPortfolioList = Array.isArray(contractorCardSource?.portfolio)
+          ? contractorCardSource.portfolio
+          : Array.isArray(contractorProfile.portfolio)
+          ? contractorProfile.portfolio
+          : [];
+        const portfolioValue = rawPortfolioList
+          .map((item) => {
+            if (!item) {
+              return "";
+            }
+            if (typeof item === "string") {
+              return item.trim();
+            }
+            if (typeof item !== "object") {
+              return "";
+            }
+            const title = typeof item.title === "string" && item.title.trim().length ? item.title.trim() : "";
+            const imageCandidate = typeof item.imageUrl === "string" && item.imageUrl.trim().length ? item.imageUrl.trim() : "";
+            const linkCandidate = typeof item.linkUrl === "string" && item.linkUrl.trim().length ? item.linkUrl.trim() : "";
+            const url = linkCandidate || imageCandidate || "";
+            if (!url) {
+              return "";
+            }
+            if (title && !title.toLowerCase().startsWith("работа ")) {
+              return `${title} | ${url}`;
+            }
+            return url;
+          })
+          .filter(Boolean)
+          .join("\n");
+        const priceValue =
+          sanitizedCard && typeof sanitizedCard.priceFrom !== "undefined" && sanitizedCard.priceFrom !== null
+            ? sanitizedCard.priceFrom
+            : "";
+        const coverValue = sanitizedCard?.coverImageUrl || "";
+        const isPublished = Boolean(contractorProfile.isPublished ?? sanitizedCard?.isPublished);
+        const previewMarkup =
+          sanitizedCard && sanitizedCard.id
+            ? this.renderMarketplaceCard(sanitizedCard, null, 0)
+            : '<p class="marketplace-empty">Добавьте данные карточки и сохраните, чтобы увидеть предпросмотр.</p>';
+        this.appEl.innerHTML = `
+          <section class="card dashboard dashboard--contractor">
+            <header class="dashboard-header">
+              <h1>${this.escapeHtml(companyNameValue || 'Профиль подрядчика')}</h1>
+              <p class="dashboard-subtitle">Заполните карточку, чтобы появиться в каталоге подрядчиков.</p>
+            </header>
+            <div class="contractor-dashboard">
+              <form id="contractor-card-form" class="contractor-card-form">
+                <div class="contractor-card-form__field">
+                  <label for="contractor-company">Название / бренд</label>
+                  <input id="contractor-company" name="companyName" type="text" value="${this.escapeHtml(companyNameValue)}" placeholder="Например, Студия Света" required>
+                </div>
+                <div class="contractor-card-form__field">
+                  <label for="contractor-description">Короткое описание</label>
+                  <textarea id="contractor-description" name="description" rows="3" placeholder="Расскажите, чем вы помогаете парам.">${this.escapeHtml(descriptionValue)}</textarea>
+                </div>
+                <div class="contractor-card-form__field">
+                  <label for="contractor-services">Услуги (по одной на строку)</label>
+                  <textarea id="contractor-services" name="services" rows="4" placeholder="Съемка утра невесты
+Love Story">${this.escapeHtml(servicesValue)}</textarea>
+                </div>
+                <div class="contractor-card-form__field">
+                  <label for="contractor-portfolio">Портфолио (ссылки, каждая с новой строки)</label>
+                  <textarea id="contractor-portfolio" name="portfolio" rows="4" placeholder="Видеоролик | https://...\nhttps://instagram.com/...">${this.escapeHtml(portfolioValue)}</textarea>
+                </div>
+                <div class="contractor-card-form__grid">
+                  <div class="contractor-card-form__field">
+                    <label for="contractor-price">Стоимость от (₽)</label>
+                    <input id="contractor-price" name="priceFrom" type="number" min="0" step="1000" value="${this.escapeHtml(priceValue === null ? '' : String(priceValue))}" placeholder="24000">
+                  </div>
+                  <div class="contractor-card-form__field">
+                    <label for="contractor-cover">Ссылка на обложку</label>
+                    <input id="contractor-cover" name="coverImageUrl" type="url" value="${this.escapeHtml(coverValue)}" placeholder="https://...">
+                  </div>
+                </div>
+                <label class="contractor-card-form__publish">
+                  <input type="checkbox" name="isPublished" ${isPublished ? 'checked' : ''}>
+                  <span>Показывать в маркетплейсе</span>
+                </label>
+                <div class="contractor-card-form__actions">
+                  <button type="submit">Сохранить карточку</button>
+                  <span class="contractor-card-form__status" data-contract-status></span>
+                </div>
+              </form>
+              <aside class="contractor-card-preview">
+                <h2>Предпросмотр карточки</h2>
+                <div id="contractor-card-preview">${previewMarkup}</div>
+              </aside>
+            </div>
+          </section>
+        `;
+        this.bindDashboardEvents(0, 0);
+        return;
+      }
+
       const serverCompanyName =
-        (activeServerProfile && typeof activeServerProfile.companyName === "string"
-          ? activeServerProfile.companyName
+        (serverSnapshot && typeof serverSnapshot?.profile?.companyName === "string"
+          ? serverSnapshot.profile.companyName
           : profile?.companyName) || "";
       const serverCoupleNames =
-        (activeServerProfile && typeof activeServerProfile.coupleNames === "string"
-          ? activeServerProfile.coupleNames
+        (serverSnapshot && typeof serverSnapshot?.profile?.coupleNames === "string"
+          ? serverSnapshot.profile.coupleNames
           : profile?.coupleNames) || "";
       const serverLocation =
-        (activeServerProfile && typeof activeServerProfile.location === "string"
-          ? activeServerProfile.location
+        (serverSnapshot && typeof serverSnapshot?.profile?.location === "string"
+          ? serverSnapshot.profile.location
           : profile?.location) || "";
       const serverEventDate =
-        (activeServerProfile && activeServerProfile.eventDate !== undefined
-          ? activeServerProfile.eventDate
+        (serverSnapshot && serverSnapshot.profile && serverSnapshot.profile.eventDate !== undefined
+          ? serverSnapshot.profile.eventDate
           : profile?.eventDate) || null;
       const summaryItems = [];
       if (hasProfile) {
@@ -132,6 +322,7 @@
       const headingSubtext = hasProfile
         ? `<p class="dashboard-subtitle">Здесь вы можете собрать все необходимое для свадьбы мечты.</p>`
         : "";
+      const authControls = this.renderAuthControls ? this.renderAuthControls() : "";
       const heroImage = `
         <div class="dashboard-hero-image">
           <img src="https://images.unsplash.com/photo-1542379510-1026e928ed4f?q=80&w=3118&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D" alt="Счастливая пара на свадьбе">
@@ -184,7 +375,7 @@
         ? budgetModule.previousTotal
         : this.state.lastBudgetTotal || 0;
       this.state.lastBudgetTotal = totalBudget;
-      const marketplaceModule = this.renderMarketplaceModule(backgroundInertAttributes);
+      const marketplaceModule = normalizedRole === "wedding" ? this.renderMarketplaceModule(backgroundInertAttributes) : "";
       const warningBlock =
         this.state.profileSyncStatus === "degraded"
           ? '<div class="profile-warning" role="status" aria-live="polite">Сервер профиля временно недоступен. Показаны сохранённые данные.</div>'
@@ -192,6 +383,7 @@
       this.appEl.innerHTML = `
         <section class="card dashboard">
           ${warningBlock}
+          ${authControls}
           <nav class="dashboard-nav" aria-label="Основные разделы">
             ${navItems}
           </nav>
@@ -222,7 +414,6 @@
       document.body.classList.toggle("checklist-expanded", this.state.isChecklistExpanded);
       this.bindDashboardEvents(previousTotal, totalBudget);
     },
-
     updateWebsitePreview() {
       const profile = this.state.profile || {};
       const invitation = this.ensureWebsiteInvitationData() || this.createDefaultWebsiteInvitation();
@@ -1015,45 +1206,81 @@
     },
 
     renderMarketplaceModule(backgroundInertAttributes = "") {
-      const categories = Array.isArray(CONTRACTOR_MARKETPLACE) ? CONTRACTOR_MARKETPLACE : [];
-      if (!categories.length) {
+      const favoritesSet = this.state.marketplaceFavorites instanceof Set ? this.state.marketplaceFavorites : new Set();
+      const storedCatalog = Array.isArray(this.state.marketplaceCatalog) ? this.state.marketplaceCatalog : [];
+      const baseCatalog = storedCatalog.length
+        ? storedCatalog
+        : typeof this.normalizeMarketplaceCatalog === "function"
+        ? this.normalizeMarketplaceCatalog(CONTRACTOR_MARKETPLACE)
+        : Array.isArray(CONTRACTOR_MARKETPLACE)
+        ? CONTRACTOR_MARKETPLACE
+        : [];
+      const normalizedCatalog = typeof this.normalizeMarketplaceCatalog === "function"
+        ? this.normalizeMarketplaceCatalog(baseCatalog)
+        : baseCatalog.filter((card) => card && typeof card === "object");
+      if (!normalizedCatalog.length) {
         return "";
       }
-      const favoritesSet = this.state.marketplaceFavorites instanceof Set ? this.state.marketplaceFavorites : new Set();
-      const favoritesContractors = [];
-      categories.forEach((category) => {
-        if (!category || typeof category !== "object" || !Array.isArray(category.contractors)) {
+      const favoritesContractors = normalizedCatalog.filter((card) => favoritesSet.has(card.id));
+      const serviceBuckets = new Map();
+      normalizedCatalog.forEach((card) => {
+        if (!Array.isArray(card.services)) {
           return;
         }
-        const categoryTitle = typeof category.title === "string" ? category.title : String(category.title || "");
-        category.contractors.forEach((contractor) => {
-          if (
-            contractor &&
-            typeof contractor === "object" &&
-            typeof contractor.id === "string" &&
-            favoritesSet.has(contractor.id)
-          ) {
-            favoritesContractors.push({
-              ...contractor,
-              categoryTitle
+        card.services.forEach((service) => {
+          if (!service) {
+            return;
+          }
+          const title =
+            typeof service.title === "string" && service.title.trim().length
+              ? service.title.trim()
+              : typeof service.name === "string" && service.name.trim().length
+              ? service.name.trim()
+              : "";
+          if (!title) {
+            return;
+          }
+          const baseSlug = title
+            .toLowerCase()
+            .replace(/[^a-z0-9а-яё]+/gi, "-")
+            .replace(/^-+|-+$/g, "");
+          const id = baseSlug ? `service-${baseSlug}` : `service-${serviceBuckets.size + 1}`;
+          if (!serviceBuckets.has(id)) {
+            serviceBuckets.set(id, {
+              id,
+              title,
+              contractors: []
             });
+          }
+          const bucket = serviceBuckets.get(id);
+          if (!bucket.contractors.includes(card)) {
+            bucket.contractors.push(card);
           }
         });
       });
-      const favoritesCategory = {
-        id: "favorites",
-        title: "Избранное",
-        contractors: favoritesContractors
-      };
-      const allCategories = [favoritesCategory, ...categories];
+      const serviceCategories = Array.from(serviceBuckets.values()).sort((a, b) =>
+        a.title.localeCompare(b.title, "ru", { sensitivity: "base" })
+      );
+      const categories = [
+        {
+          id: "favorites",
+          title: "Избранное",
+          contractors: favoritesContractors
+        },
+        {
+          id: "all",
+          title: "Все подрядчики",
+          contractors: normalizedCatalog
+        },
+        ...serviceCategories
+      ];
       let selectedId = this.state.marketplaceCategoryId;
-      const firstRegularCategoryId = categories[0]?.id || favoritesCategory.id;
-      if (!selectedId || !allCategories.some((category) => category && category.id === selectedId)) {
-        selectedId = firstRegularCategoryId;
+      if (!selectedId || !categories.some((category) => category && category.id === selectedId)) {
+        selectedId = "all";
         this.state.marketplaceCategoryId = selectedId;
       }
       const visibleContractorsById = new Map();
-      const categoriesMarkup = allCategories
+      const categoriesMarkup = categories
         .map((category) => {
           if (!category || typeof category !== "object") {
             return "";
@@ -1063,22 +1290,13 @@
             return "";
           }
           const contractorsForCategory = rawId === "favorites"
-            ? favoritesContractors
+            ? category.contractors
             : this.getRandomizedContractors(category);
-          const decoratedContractors = contractorsForCategory
-            .filter((contractor) => contractor && typeof contractor === "object")
-            .map((contractor) => ({
-              ...contractor,
-              categoryTitle:
-                typeof contractor.categoryTitle === "string" && contractor.categoryTitle.trim().length
-                  ? contractor.categoryTitle
-                  : category.title || ""
-            }));
-          visibleContractorsById.set(rawId, decoratedContractors);
+          visibleContractorsById.set(rawId, contractorsForCategory);
           const safeId = this.escapeHtml(rawId);
           const title = this.escapeHtml(category.title || "");
-          const contractorCount = decoratedContractors.length;
-          const formattedCount = this.escapeHtml(currencyFormatter.format(contractorCount));
+          const contractorCount = contractorsForCategory.length;
+          const formattedCount = this.escapeHtml(String(contractorCount));
           const isActive = rawId === selectedId;
           const iconMarkup = rawId === "favorites"
             ? '<span class="marketplace-category__icon" aria-hidden="true">❤️</span>'
@@ -1094,16 +1312,15 @@
           `;
         })
         .join("");
-      const selectedCategory =
-        allCategories.find((category) => category && category.id === selectedId) || allCategories[0];
-      const selectedSafeId = this.escapeHtml(selectedCategory?.id || "all");
-      const selectedContractors = visibleContractorsById.get(selectedCategory?.id) || [];
-      const emptyMessage = selectedCategory?.id === "favorites"
+      const selectedContractors = visibleContractorsById.get(selectedId) || [];
+      const selectedCategoryObject = categories.find((category) => category && category.id === selectedId) || categories[0];
+      const selectedSafeId = this.escapeHtml(selectedId);
+      const emptyMessage = selectedId === "favorites"
         ? '<p class="marketplace-empty marketplace-empty--favorites">Добавьте подрядчиков в избранное, чтобы увидеть их здесь.</p>'
-        : '<p class="marketplace-empty">Скоро добавим подрядчиков в эту категорию.</p>';
+        : '<p class="marketplace-empty">Скоро добавим опубликованные карточки подрядчиков.</p>';
       const cardsMarkup = selectedContractors.length
         ? selectedContractors
-            .map((contractor, index) => this.renderMarketplaceCard(contractor, selectedCategory, index))
+            .map((contractor, index) => this.renderMarketplaceCard(contractor, selectedCategoryObject, index))
             .join("")
         : emptyMessage;
       return `
@@ -1123,7 +1340,6 @@
         </section>
       `;
     },
-
     renderMarketplaceCard(contractor, category, index) {
       if (!contractor || typeof contractor !== "object") {
         return "";
@@ -1139,60 +1355,80 @@
       const favoritesSet = this.state.marketplaceFavorites instanceof Set ? this.state.marketplaceFavorites : new Set();
       const isFavorite = favoritesSet.has(rawId);
       const favoriteLabel = isFavorite ? "Убрать из избранного" : "Добавить в избранное";
-      const priceValue = Number(contractor.price);
-      const price = Number.isFinite(priceValue) ? Math.max(0, Math.round(priceValue)) : 0;
-      const ratingValue = Number.parseFloat(contractor.rating);
-      const rating = Number.isFinite(ratingValue) ? ratingValue.toFixed(1) : "5.0";
-      const ratingLabel = `Средняя оценка ${rating} из 5`;
-      const reviewsValue = Number(contractor.reviews);
-      const reviews = Number.isFinite(reviewsValue) ? Math.max(0, Math.round(reviewsValue)) : 0;
-      const reviewsText = `${currencyFormatter.format(reviews)} оценок`;
-      const location = typeof contractor.location === "string" && contractor.location.trim().length
-        ? `<p class="marketplace-card__location">${this.escapeHtml(contractor.location)}</p>`
+      const priceValue = Number(contractor.priceFrom ?? contractor.price ?? null);
+      const priceFrom = Number.isFinite(priceValue) ? Math.max(0, Math.round(priceValue)) : null;
+      const priceMarkup = Number.isFinite(priceFrom) && priceFrom > 0
+        ? `<p class="marketplace-card__price"><strong>${this.formatCurrency(priceFrom)}</strong></p>`
         : "";
-      const description = typeof contractor.tagline === "string" && contractor.tagline.trim().length
-        ? `<p class="marketplace-card__description">${this.escapeHtml(contractor.tagline)}</p>`
+      const imageUrl = typeof contractor.coverImageUrl === "string" && contractor.coverImageUrl.trim().length
+        ? contractor.coverImageUrl.trim()
+        : Array.isArray(MARKETPLACE_IMAGES) && MARKETPLACE_IMAGES.length
+        ? MARKETPLACE_IMAGES[0]
         : "";
-      const imageUrl = typeof contractor.image === "string" && contractor.image
-        ? contractor.image
-        : (Array.isArray(MARKETPLACE_IMAGES) && MARKETPLACE_IMAGES.length ? MARKETPLACE_IMAGES[0] : "");
-      const categoryTitle = typeof contractor.categoryTitle === "string" && contractor.categoryTitle.trim().length
-        ? contractor.categoryTitle.trim()
-        : category?.title || "";
-      const altBase = typeof contractor.imageAlt === "string" && contractor.imageAlt.trim().length
-        ? contractor.imageAlt
-        : `${rawName}${categoryTitle ? ` — ${categoryTitle}` : ""}`;
+      const altBase = category && category.title
+        ? `${rawName} — ${category.title}`
+        : rawName;
       const altText = this.escapeHtml(altBase);
-      const phoneValue = typeof contractor.phone === "string" && contractor.phone.trim().length
-        ? contractor.phone.trim()
-        : "+7 (999) 867 17 49";
-      const safePhone = this.escapeHtml(phoneValue);
+      const city = typeof contractor.city === "string" && contractor.city.trim().length ? contractor.city.trim() : "";
+      const cityMarkup = city ? `<p class="marketplace-card__location">${this.escapeHtml(city)}</p>` : "";
+      const description = typeof contractor.description === "string" && contractor.description.trim().length
+        ? `<p class="marketplace-card__description">${this.escapeHtml(contractor.description.trim())}</p>`
+        : "";
+      const servicesList = Array.isArray(contractor.services)
+        ? contractor.services
+            .map((service) => {
+              if (!service) {
+                return "";
+              }
+              if (typeof service === "string") {
+                return service.trim();
+              }
+              if (typeof service.title === "string" && service.title.trim().length) {
+                return service.title.trim();
+              }
+              if (typeof service.name === "string" && service.name.trim().length) {
+                return service.name.trim();
+              }
+              return "";
+            })
+            .filter((label) => label && label.length)
+        : [];
+      const servicesMarkup = servicesList.length
+        ? `<p class="marketplace-card__services">${servicesList
+            .slice(0, 4)
+            .map((label) => `<span>${this.escapeHtml(label)}</span>`)
+            .join(" ")}</p>`
+        : "";
       const safeIdAttr = this.escapeHtml(rawId);
+      const favoriteIcon = isFavorite ? "❤️" : "♡";
+      const phoneCandidate =
+        (contractor && typeof contractor.phone === "string" && contractor.phone.trim().length
+          ? contractor.phone.trim()
+          : null) ||
+        MARKETPLACE_CONTACT_PHONE ||
+        "+7 (999) 867 17 49";
+      const safePhone = this.escapeHtml(phoneCandidate);
       return `
         <article class="marketplace-card" role="listitem">
           <div class="marketplace-card__image">
             <img src="${this.escapeHtml(imageUrl)}" alt="${altText}">
             <button type="button" class="marketplace-card__favorite" data-action="marketplace-favorite" data-vendor-id="${safeIdAttr}" aria-pressed="${isFavorite}" aria-label="${this.escapeHtml(favoriteLabel)}" title="${this.escapeHtml(favoriteLabel)}">
-              <span class="marketplace-card__favorite-icon" aria-hidden="true">${isFavorite ? "❤️" : "♡"}</span>
+              <span class="marketplace-card__favorite-icon" aria-hidden="true">${favoriteIcon}</span>
             </button>
           </div>
           <div class="marketplace-card__info">
-            <p class="marketplace-card__price"><strong>${this.formatCurrency(price)}</strong></p>
+            ${priceMarkup}
             <h3 class="marketplace-card__title">${safeName}</h3>
-            <p class="marketplace-card__meta">
-              <span class="marketplace-card__rating" aria-label="${this.escapeHtml(ratingLabel)}">⭐${rating}</span>
-              <span class="marketplace-card__reviews">${this.escapeHtml(reviewsText)}</span>
-            </p>
-            ${location}
+            ${cityMarkup}
+            ${servicesMarkup}
             ${description}
             <div class="marketplace-card__actions">
-              <button type="button" class="marketplace-card__action marketplace-card__action--phone" data-action="marketplace-phone" data-vendor-name="${this.escapeHtml(rawName)}" data-vendor-phone="${safePhone}">Показать телефон</button>
+              <button type="button" class="marketplace-card__action marketplace-card__action--phone" data-action="marketplace-phone" data-vendor-name="${this.escapeHtml(rawName)}" data-vendor-phone="${safePhone}">Связаться</button>
             </div>
           </div>
         </article>
       `;
     },
-
     renderChecklistItems(tasks, folders) {
       const folderMarkup = folders
         .map((folder) => {

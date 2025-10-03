@@ -4,6 +4,7 @@ const morgan = require('morgan');
 const config = require('./config');
 const authRouter = require('../../routes/auth');
 const profileRouter = require('../../routes/profile');
+const marketplaceRouter = require('../../routes/marketplace');
 const {
   ROOT_DIR,
   ensureInvitesDirectory
@@ -26,6 +27,7 @@ function createApp() {
   app.use(express.json({ limit: '1mb' }));
   app.use('/api/auth', authRouter);
   app.use('/api/profile', requireAuth, profileRouter);
+  app.use('/api/marketplace', marketplaceRouter);
   app.use('/', invitationsRouter);
   app.use(express.static(ROOT_DIR, { extensions: ['html'] }));
 
